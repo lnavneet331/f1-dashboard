@@ -491,21 +491,69 @@ def get_latest_session_data() -> tuple:
         return None, None, None
 
 def main():
+    st.set_page_config(layout="wide", page_title="F1 Dashboard")
+    
+    # Custom CSS for better styling
+    st.markdown("""
+        <style>
+        .main-nav-button {
+            background-color: #1E1E1E;
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            margin: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .main-nav-button:hover {
+            background-color: #2E2E2E;
+            transform: translateY(-2px);
+        }
+        .sub-nav-button {
+            background-color: #2E2E2E;
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            margin: 5px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .sub-nav-button:hover {
+            background-color: #3E3E3E;
+            transform: translateY(-2px);
+        }
+        .active-button {
+            background-color: #FF1801 !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    # Main Navigation
     st.title("Formula 1 Dashboard")
     
-    # Create sidebar for controls
-    with st.sidebar:
-        st.header("Session Selection")
-        
-        # Add navigation buttons
-        st.write("### Navigation")
-        view = st.radio(
-            "Select View",
-            ["🏁 Sessions", "👤 Driver Details", "📊 Race Control"],
-            index=0,
-            horizontal=True
-        )
-
+    # Create three columns for main navigation buttons
+    nav_col1, nav_col2, nav_col3 = st.columns(3)
+    
+    with nav_col1:
+        if st.button("🏁 Sessions", key="sessions_nav", use_container_width=True):
+            st.session_state.current_view = "sessions"
+            st.session_state.current_subview = "info"
+    
+    with nav_col2:
+        if st.button("👤 Drivers", key="drivers_nav", use_container_width=True):
+            st.session_state.current_view = "drivers"
+    
+    with nav_col3:
+        if st.button("🏎️ Teams", key="teams_nav", use_container_width=True):
+            st.session_state.current_view = "teams"
+    
+    # Initialize session state if not exists
+    if 'current_view' not in st.session_state:
+        st.session_state.current_view = "sessions"
+        st.session_state.current_subview = "info"
+    
     # Fetch and display seasons dropdown
     with st.spinner("Loading seasons..."):
         seasons = fetch_seasons()
@@ -522,254 +570,267 @@ def main():
     default_round = f"Round {latest_round.get('round', 'N/A')} - {latest_round.get('meeting_name', 'Unknown')}" if latest_round else None
     default_session = latest_session if latest_session else None
 
-    # Select season with default value
-    selected_season = st.selectbox("Select Season", seasons, 
-                                 index=seasons.index(default_season) if default_season in seasons else 0)
-
-    # Fetch rounds for the selected season
-    with st.spinner("Loading rounds..."):
-        rounds = fetch_rounds(selected_season)
-    
-    if not rounds:
-        st.error("Failed to fetch rounds. Please try again later.")
-        return
-
-    # Create round options dictionary
-    round_options = {f"Round {r.get('round', 'N/A')} - {r.get('meeting_name', 'Unknown')}": r.get('meeting_key', 0) for r in rounds}
-    
-    # Select round with default value
-    selected_round = st.selectbox("Select Round", list(round_options.keys()), 
-                                index=list(round_options.keys()).index(default_round) if default_round in round_options else 0)
-    meeting_key = round_options[selected_round]
-
-    # Fetch session types for the selected round
-    with st.spinner("Loading session types..."):
-        session_types = fetch_session_types(meeting_key)
-    
-    if not session_types:
-        st.error("Failed to fetch session types. Please try again later.")
-        return
-
-    # Select session type with default value
-    selected_session = st.selectbox("Select Session Type", session_types,
-                                  index=session_types.index(default_session) if default_session in session_types else 0)
-
-    # Check if we have valid session data
-    session_key = fetch_session_key(meeting_key, selected_session)
-    if not session_key:
-        st.warning("No session data available for the selected options.")
-        return
-
     # Main content area
-    if view == "🏁 Sessions":
-        # Session View
-        st.write(f"### {selected_season} {selected_round.split(' - ')[1]} · {selected_session}")
+    if st.session_state.current_view == "sessions":
+        # Sessions View
+        st.write("### Session Selection")
         
-        # Display weather information
-        weather_data = fetch_weather(session_key)
-        if weather_data:
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Air Temperature", f"{weather_data['air_temperature']}°C")
-            with col2:
-                st.metric("Track Temperature", f"{weather_data['track_temperature']}°C")
-            with col3:
-                st.metric("Humidity", f"{weather_data['humidity']}%")
-            with col4:
-                st.metric("Wind Speed", f"{weather_data['wind_speed']} m/s")
+        # Create three columns for sub-navigation
+        sub_nav_col1, sub_nav_col2, sub_nav_col3 = st.columns(3)
         
-        # Fetch and display leaderboard
-        with st.spinner("Loading leaderboard..."):
+        with sub_nav_col1:
+            if st.button("📊 Session Info", key="session_info_nav", use_container_width=True):
+                st.session_state.current_subview = "info"
+        
+        with sub_nav_col2:
+            if st.button("🚨 Race Control", key="race_control_nav", use_container_width=True):
+                st.session_state.current_subview = "race_control"
+        
+        with sub_nav_col3:
+            if st.button("📻 Team Radio", key="team_radio_nav", use_container_width=True):
+                st.session_state.current_subview = "team_radio"
+        
+        # Session selection controls
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            selected_season = st.selectbox("Select Season", seasons, 
+                                         index=seasons.index(default_season) if default_season in seasons else 0)
+        
+        # Fetch rounds for the selected season
+        with st.spinner("Loading rounds..."):
+            rounds = fetch_rounds(selected_season)
+        
+        if not rounds:
+            st.error("Failed to fetch rounds. Please try again later.")
+            return
+
+        # Create round options dictionary
+        round_options = {f"Round {r.get('round', 'N/A')} - {r.get('meeting_name', 'Unknown')}": r.get('meeting_key', 0) for r in rounds}
+        
+        with col2:
+            selected_round = st.selectbox("Select Round", list(round_options.keys()), 
+                                        index=list(round_options.keys()).index(default_round) if default_round in round_options else 0)
+            meeting_key = round_options[selected_round]
+
+        # Fetch session types for the selected round
+        with st.spinner("Loading session types..."):
+            session_types = fetch_session_types(meeting_key)
+        
+        if not session_types:
+            st.error("Failed to fetch session types. Please try again later.")
+            return
+
+        with col3:
+            selected_session = st.selectbox("Select Session Type", session_types,
+                                          index=session_types.index(default_session) if default_session in session_types else 0)
+
+        # Check if we have valid session data
+        session_key = fetch_session_key(meeting_key, selected_session)
+        if not session_key:
+            st.warning("No session data available for the selected options.")
+            return
+
+        # Display sub-view content
+        if st.session_state.current_subview == "info":
+            st.write(f"### {selected_season} {selected_round.split(' - ')[1]} · {selected_session}")
+            
+            # Display weather information
+            weather_data = fetch_weather(session_key)
+            if weather_data:
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Air Temperature", f"{weather_data['air_temperature']}°C")
+                with col2:
+                    st.metric("Track Temperature", f"{weather_data['track_temperature']}°C")
+                with col3:
+                    st.metric("Humidity", f"{weather_data['humidity']}%")
+                with col4:
+                    st.metric("Wind Speed", f"{weather_data['wind_speed']} m/s")
+            
+            # Display leaderboard
+            with st.spinner("Loading leaderboard..."):
+                if session_key:
+                    drivers = fetch_drivers(session_key)
+                    positions = fetch_positions(session_key)
+                    
+                    if drivers and positions:
+                        latest_positions = get_latest_positions(positions)
+                        
+                        # Create a DataFrame for the leaderboard
+                        leaderboard_data = []
+                        lap_times = fetch_lap_times(session_key)
+                        finishing_times = get_finishing_times(lap_times)
+                        gaps = calculate_gaps(finishing_times)
+                        position_changes = get_position_changes(positions)
+                        
+                        # Check if this is a race or sprint session
+                        is_race_session = selected_session.lower() in ['race', 'sprint']
+                        
+                        for driver in drivers:
+                            driver_number = driver['driver_number']
+                            entry = {
+                                'Position': latest_positions.get(driver_number, 'DNF'),
+                                'Driver': f"{driver['driver_number']} - {driver['name_acronym']}",
+                                'Time': format_time(finishing_times.get(driver_number)),
+                                'Gap': gaps.get(driver_number, 'DNF')
+                            }
+                            if is_race_session:
+                                entry['Pos Change'] = format_position_change(position_changes.get(driver_number, 0))
+                            leaderboard_data.append(entry)
+                        
+                        # Sort by position and display
+                        df = pd.DataFrame(leaderboard_data)
+                        df = df.sort_values('Position')
+                        
+                        st.write("### Leaderboard")
+                        
+                        # Create a dictionary of driver numbers to team colors
+                        driver_colors = {driver['driver_number']: f"#{driver['team_colour']}" 
+                                       for driver in drivers}
+                        
+                        # Apply styling to the DataFrame
+                        styled_df = df.style
+                        
+                        # Apply team colors to driver cells
+                        def color_team(val):
+                            """Apply team color to driver cell with appropriate text color."""
+                            for driver_number, team_color in driver_colors.items():
+                                if val.startswith(f"{driver_number} -"):
+                                    # Convert hex to RGB to determine if background is light or dark
+                                    hex_color = team_color.lstrip('#')
+                                    rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                                    # Calculate relative luminance
+                                    luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
+                                    # Use white text for dark backgrounds, black for light backgrounds
+                                    text_color = 'white' if luminance < 0.5 else 'black'
+                                    return f'background-color: {team_color}; color: {text_color};'
+                            return ''
+                        
+                        # Apply team colors to all driver cells
+                        styled_df = styled_df.applymap(color_team, subset=['Driver'])
+                        
+                        # Apply position change colors for race/sprint sessions
+                        def color_position_change(val):
+                            if val.startswith('+'):
+                                return 'color: green'
+                            elif val.startswith('-'):
+                                return 'color: red'
+                            return ''
+                        
+                        if is_race_session:
+                            styled_df = styled_df.applymap(color_position_change, subset=['Pos Change'])
+                        
+                        # Display the styled DataFrame
+                        st.dataframe(styled_df, hide_index=True)
+                    else:
+                        st.error("Failed to load leaderboard data. Please try again later.")
+                else:
+                    st.error("Failed to fetch session key. Please try again later.")
+        
+        elif st.session_state.current_subview == "race_control":
+            st.write("### Race Control Messages")
+            if session_key:
+                race_control_data = fetch_race_control(session_key)
+                if race_control_data:
+                    # Group messages by category
+                    messages_by_category = {}
+                    for msg in race_control_data:
+                        category = msg.get('category', 'Other')
+                        if category not in messages_by_category:
+                            messages_by_category[category] = []
+                        messages_by_category[category].append(msg)
+                    
+                    # Display messages by category
+                    for category, messages in messages_by_category.items():
+                        st.write(f"#### {category}")
+                        for msg in messages:
+                            # Create a colored box based on flag type
+                            flag_color = {
+                                'RED': '#FF0000',
+                                'YELLOW': '#FFFF00',
+                                'GREEN': '#00FF00',
+                                'BLACK': '#000000',
+                                'BLUE': '#0000FF',
+                                'WHITE': '#FFFFFF',
+                                'CHEQUERED': '#000000'
+                            }.get(msg.get('flag', ''), '#808080')
+                            
+                            st.markdown(
+                                f"""
+                                <div style="
+                                    background-color: {flag_color};
+                                    color: {'white' if flag_color in ['#000000', '#0000FF'] else 'black'};
+                                    padding: 10px;
+                                    border-radius: 5px;
+                                    margin: 5px 0;
+                                ">
+                                    <strong>{msg.get('flag', 'Message')}</strong><br>
+                                    {msg.get('message', 'No message')}<br>
+                                    <small>Lap {msg.get('lap_number', 'N/A')}</small>
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
+                else:
+                    st.info("No race control messages available for this session.")
+            else:
+                st.error("Failed to fetch session key. Please try again later.")
+        
+        else:  # Team Radio view
+            st.write("### Team Radio Messages")
             if session_key:
                 drivers = fetch_drivers(session_key)
-                positions = fetch_positions(session_key)
-                
-                if drivers and positions:
-                    latest_positions = get_latest_positions(positions)
-                    
-                    # Create a DataFrame for the leaderboard
-                    leaderboard_data = []
-                    lap_times = fetch_lap_times(session_key)
-                    finishing_times = get_finishing_times(lap_times)
-                    gaps = calculate_gaps(finishing_times)
-                    position_changes = get_position_changes(positions)
-                    
-                    # Check if this is a race or sprint session
-                    is_race_session = selected_session.lower() in ['race', 'sprint']
-                    
-                    for driver in drivers:
-                        driver_number = driver['driver_number']
-                        entry = {
-                            'Position': latest_positions.get(driver_number, 'DNF'),
-                            'Driver': f"{driver['driver_number']} - {driver['name_acronym']}",
-                            'Time': format_time(finishing_times.get(driver_number)),
-                            'Gap': gaps.get(driver_number, 'DNF')
-                        }
-                        if is_race_session:
-                            entry['Pos Change'] = format_position_change(position_changes.get(driver_number, 0))
-                        leaderboard_data.append(entry)
-                    
-                    # Sort by position and display
-                    df = pd.DataFrame(leaderboard_data)
-                    df = df.sort_values('Position')
-                    
-                    st.write("### Leaderboard")
-                    
-                    # Create a dictionary of driver numbers to team colors
-                    driver_colors = {driver['driver_number']: f"#{driver['team_colour']}" 
-                                   for driver in drivers}
-                    
-                    # Apply styling to the DataFrame
-                    styled_df = df.style
-                    
-                    # Apply team colors to driver cells
-                    def color_team(val):
-                        """Apply team color to driver cell with appropriate text color."""
-                        for driver_number, team_color in driver_colors.items():
-                            if val.startswith(f"{driver_number} -"):
-                                # Convert hex to RGB to determine if background is light or dark
-                                hex_color = team_color.lstrip('#')
-                                rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-                                # Calculate relative luminance
-                                luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
-                                # Use white text for dark backgrounds, black for light backgrounds
-                                text_color = 'white' if luminance < 0.5 else 'black'
-                                return f'background-color: {team_color}; color: {text_color};'
-                        return ''
-                    
-                    # Apply team colors to all driver cells
-                    styled_df = styled_df.applymap(color_team, subset=['Driver'])
-                    
-                    # Apply position change colors for race/sprint sessions
-                    def color_position_change(val):
-                        if val.startswith('+'):
-                            return 'color: green'
-                        elif val.startswith('-'):
-                            return 'color: red'
-                        return ''
-                    
-                    if is_race_session:
-                        styled_df = styled_df.applymap(color_position_change, subset=['Pos Change'])
-                    
-                    # Display the styled DataFrame
-                    st.dataframe(styled_df, hide_index=True)
+                if drivers:
+                    # Create a grid of driver cards with radio messages
+                    cols = st.columns(3)
+                    for idx, driver in enumerate(drivers):
+                        with cols[idx % 3]:
+                            # Create a card with team color background
+                            team_color = f"#{driver['team_colour']}"
+                            hex_color = team_color.lstrip('#')
+                            rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                            luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
+                            text_color = 'white' if luminance < 0.5 else 'black'
+                            
+                            st.markdown(
+                                f"""
+                                <div style="
+                                    background-color: {team_color};
+                                    color: {text_color};
+                                    padding: 20px;
+                                    border-radius: 10px;
+                                    margin-bottom: 20px;
+                                    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                                ">
+                                    <h3 style="margin: 0;">{driver['driver_number']} - {driver['name_acronym']}</h3>
+                                    <p style="margin: 10px 0;">{driver['full_name']}</p>
+                                    <p style="margin: 5px 0;">{driver['team_name']}</p>
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
+                            
+                            # Add team radio messages
+                            radio_messages = fetch_team_radio(session_key, driver['driver_number'])
+                            if radio_messages:
+                                for msg in radio_messages:
+                                    st.audio(msg['recording_url'])
+                            else:
+                                st.info("No radio messages available")
                 else:
-                    st.error("Failed to load leaderboard data. Please try again later.")
+                    st.error("Failed to load driver details. Please try again later.")
             else:
                 st.error("Failed to fetch session key. Please try again later.")
     
-    elif view == "👤 Driver Details":
-        st.write("### Driver Details")
-        if session_key:
-            drivers = fetch_drivers(session_key)
-            if drivers:
-                # Create a grid of driver cards
-                cols = st.columns(3)  # 3 columns for the grid
-                for idx, driver in enumerate(drivers):
-                    with cols[idx % 3]:  # Cycle through columns
-                        # Create a card with team color background
-                        team_color = f"#{driver['team_colour']}"
-                        hex_color = team_color.lstrip('#')
-                        rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-                        luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
-                        text_color = 'white' if luminance < 0.5 else 'black'
-                        
-                        # Create a custom HTML card with team color
-                        st.markdown(
-                            f"""
-                            <div style="
-                                background-color: {team_color};
-                                color: {text_color};
-                                padding: 20px;
-                                border-radius: 10px;
-                                margin-bottom: 20px;
-                                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-                            ">
-                                <h3 style="margin: 0;">{driver['driver_number']} - {driver['name_acronym']}</h3>
-                                <p style="margin: 10px 0;">{driver['full_name']}</p>
-                                <p style="margin: 5px 0;">{driver['team_name']}</p>
-                                <p style="margin: 5px 0;">{driver['country_code']}</p>
-                            </div>
-                            """,
-                            unsafe_allow_html=True
-                        )
-                        
-                        # Add driver image if available
-                        if 'headshot_url' in driver:
-                            st.image(driver['headshot_url'], width=150)
-                        
-                        # Add car telemetry data
-                        car_data = fetch_car_data(session_key, driver['driver_number'])
-                        if car_data:
-                            latest_data = car_data[-1]
-                            st.write("Latest Telemetry:")
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.metric("Speed", f"{latest_data.get('speed', 'N/A')} km/h")
-                                st.metric("RPM", f"{latest_data.get('rpm', 'N/A')}")
-                            with col2:
-                                st.metric("DRS", DRS_STATUS.get(latest_data.get('drs', 0), "Unknown"))
-                                st.metric("Gear", f"{latest_data.get('n_gear', 'N/A')}")
-                        
-                        # Add team radio messages
-                        radio_messages = fetch_team_radio(session_key, driver['driver_number'])
-                        if radio_messages:
-                            st.write("Team Radio Messages:")
-                            for msg in radio_messages:
-                                st.audio(msg['recording_url'])
-            else:
-                st.error("Failed to load driver details. Please try again later.")
-        else:
-            st.error("Failed to fetch session key. Please try again later.")
+    elif st.session_state.current_view == "drivers":
+        st.write("### Driver Standings")
+        # TODO: Implement driver standings view
+        st.info("Driver standings view coming soon!")
     
-    else:  # Race Control View
-        st.write("### Race Control Messages")
-        if session_key:
-            race_control_data = fetch_race_control(session_key)
-            if race_control_data:
-                # Group messages by category
-                messages_by_category = {}
-                for msg in race_control_data:
-                    category = msg.get('category', 'Other')
-                    if category not in messages_by_category:
-                        messages_by_category[category] = []
-                    messages_by_category[category].append(msg)
-                
-                # Display messages by category
-                for category, messages in messages_by_category.items():
-                    st.write(f"#### {category}")
-                    for msg in messages:
-                        # Create a colored box based on flag type
-                        flag_color = {
-                            'RED': '#FF0000',
-                            'YELLOW': '#FFFF00',
-                            'GREEN': '#00FF00',
-                            'BLACK': '#000000',
-                            'BLUE': '#0000FF',
-                            'WHITE': '#FFFFFF',
-                            'CHEQUERED': '#000000'
-                        }.get(msg.get('flag', ''), '#808080')
-                        
-                        st.markdown(
-                            f"""
-                            <div style="
-                                background-color: {flag_color};
-                                color: {'white' if flag_color in ['#000000', '#0000FF'] else 'black'};
-                                padding: 10px;
-                                border-radius: 5px;
-                                margin: 5px 0;
-                            ">
-                                <strong>{msg.get('flag', 'Message')}</strong><br>
-                                {msg.get('message', 'No message')}<br>
-                                <small>Lap {msg.get('lap_number', 'N/A')}</small>
-                            </div>
-                            """,
-                            unsafe_allow_html=True
-                        )
-            else:
-                st.info("No race control messages available for this session.")
-        else:
-            st.error("Failed to fetch session key. Please try again later.")
+    else:  # Teams view
+        st.write("### Constructor Standings")
+        # TODO: Implement constructor standings view
+        st.info("Constructor standings view coming soon!")
 
 if __name__ == "__main__":
     main()
