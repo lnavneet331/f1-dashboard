@@ -483,6 +483,77 @@ def fetch_location_data(session_key: int, driver_number: int) -> List[Dict]:
         logger.error(f"Error fetching location data: {str(e)}")
         return []
 
+@st.cache_resource
+def fetch_session_details(session_key: int) -> Dict:
+    """Fetch session details including start and end times."""
+    try:
+        cache_filename = f"session_details_{session_key}.json"
+        cached_data = load_from_cache(cache_filename)
+        if cached_data:
+            logger.info(f"Loading session details from cache for session {session_key}")
+            return cached_data
+
+        logger.info(f"Fetching session details for session {session_key}")
+        response = requests.get(
+            f"{BASE_URL}/sessions",
+            params={"session_key": session_key}
+        )
+        response.raise_for_status()
+        sessions = response.json()
+        if sessions:
+            session_details = sessions[0]
+            save_to_cache(session_details, cache_filename)
+            return session_details
+        return None
+    except Exception as e:
+        logger.error(f"Error fetching session details: {str(e)}")
+        return None
+
+def process_telemetry_data(telemetry_data: List[Dict], session_key: int, resampling_interval: str = '1S') -> pd.DataFrame:
+    """Process raw telemetry data into a pandas DataFrame and trim to session duration."""
+    if not telemetry_data:
+        return pd.DataFrame()
+    
+    # Convert to DataFrame
+    df = pd.DataFrame(telemetry_data)
+    
+    # Convert date strings to datetime
+    df['date'] = pd.to_datetime(df['date'])
+    
+    # Get session start and end times
+    session_details = fetch_session_details(session_key)
+    if session_details:
+        session_start = pd.to_datetime(session_details['date_start'])
+        session_end = pd.to_datetime(session_details['date_end'])
+        
+        # Filter data to only include points within session duration
+        df = df[(df['date'] >= session_start) & (df['date'] <= session_end)]
+    
+    # Add DRS status text
+    df['drs_status'] = df['drs'].map(DRS_STATUS)
+    
+    # Set date as index for resampling
+    df = df.set_index('date')
+    
+    # Resample data to reduce points while preserving trends
+    # For numeric columns, use mean
+    numeric_cols = ['speed', 'rpm', 'throttle', 'brake', 'n_gear']
+    resampled_numeric = df[numeric_cols].resample(resampling_interval).mean()
+    
+    # For DRS status, use mode (most common value)
+    resampled_drs = df['drs_status'].resample(resampling_interval).agg(lambda x: x.mode().iloc[0] if not x.empty else None)
+    
+    # Combine resampled data
+    df_resampled = pd.concat([resampled_numeric, resampled_drs], axis=1)
+    
+    # Forward fill any missing values
+    df_resampled = df_resampled.fillna(method='ffill')
+    
+    # Reset index to get date back as a column
+    df_resampled = df_resampled.reset_index()
+    
+    return df_resampled
+
 def get_fastest_lap_data(session_key: int, lap_times: List[Dict], drivers: List[Dict]) -> Dict:
     """Get the fastest lap data for each driver and overall."""
     if not lap_times:
@@ -566,22 +637,6 @@ def create_track_map(location_data: List[Dict], driver_name: str, team_color: st
     
     # Convert to HTML
     return fig.to_html(full_html=False)
-
-def process_telemetry_data(telemetry_data: List[Dict]) -> pd.DataFrame:
-    """Process raw telemetry data into a pandas DataFrame."""
-    if not telemetry_data:
-        return pd.DataFrame()
-    
-    # Convert to DataFrame
-    df = pd.DataFrame(telemetry_data)
-    
-    # Convert date strings to datetime
-    df['date'] = pd.to_datetime(df['date'])
-    
-    # Add DRS status text
-    df['drs_status'] = df['drs'].map(DRS_STATUS)
-    
-    return df
 
 def get_latest_positions(positions: List[Dict]) -> Dict[int, int]:
     """Get the latest position for each driver."""
@@ -839,6 +894,10 @@ def main():
         with sub_nav_col6:
             if st.button("🔄 Tyre Stints", key="stints_nav", use_container_width=True):
                 st.session_state.current_subview = "stints"
+            
+        with sub_nav_col7:
+            if st.button("🗺️ Track Map", key="track_map_nav", use_container_width=True):
+                st.session_state.current_subview = "track_map"
         
         # Session selection controls
         col1, col2, col3 = st.columns(3)
@@ -1083,10 +1142,27 @@ def main():
                     selected_driver = st.selectbox("Select Driver", list(driver_options.keys()))
                     driver_number = driver_options[selected_driver]
                     
+                    # Add resampling interval control
+                    st.write("#### Data Resolution Control")
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        resampling_interval = st.slider(
+                            "Adjust data resolution",
+                            min_value=0.1,
+                            max_value=120.0,  # Increased to 2 minutes
+                            value=1.0,
+                            step=0.1,
+                            help="Lower values show more detail but may be slower to render. Higher values show smoother trends. Maximum is 2 minutes."
+                        )
+                    with col2:
+                        st.write(f"Current interval: {resampling_interval:.1f}s")
+                        if resampling_interval >= 60:
+                            st.write(f"({resampling_interval/60:.1f} minutes)")
+                    
                     # Fetch and process telemetry data
                     telemetry_data = fetch_car_telemetry(session_key, driver_number)
                     if telemetry_data:
-                        df = process_telemetry_data(telemetry_data)
+                        df = process_telemetry_data(telemetry_data, session_key, f"{resampling_interval:.1f}S")
                         
                         # Create columns for different metrics
                         col1, col2 = st.columns(2)
@@ -1111,6 +1187,9 @@ def main():
                         st.write("#### Gear Selection")
                         gear_data = df[['date', 'n_gear']].set_index('date')
                         st.line_chart(gear_data)
+                        
+                        # Display data point count
+                        st.info(f"Showing {len(df)} data points (original: {len(telemetry_data)})")
                     else:
                         st.info("No telemetry data available for this session.")
                 else:
@@ -1215,6 +1294,55 @@ def main():
                         st.dataframe(driver_stats)
                     else:
                         st.info("No stint data available for this session.")
+                else:
+                    st.error("Failed to load driver details. Please try again later.")
+            else:
+                st.error("Failed to fetch session key. Please try again later.")
+        
+        elif st.session_state.current_subview == "track_map":
+            st.write("### Track Map - Fastest Laps")
+            if session_key:
+                drivers = fetch_drivers(session_key)
+                if drivers:
+                    # Get lap times
+                    lap_times = fetch_lap_times(session_key)
+                    if lap_times:
+                        # Get fastest lap data
+                        fastest_laps = get_fastest_lap_data(session_key, lap_times, drivers)
+                        
+                        # Display overall fastest lap
+                        st.write("#### Overall Fastest Lap")
+                        overall = fastest_laps['overall']
+                        st.write(f"**Driver:** {overall['driver_name']}")
+                        st.write(f"**Team:** {overall['team_name']}")
+                        st.write(f"**Lap:** {overall['lap_number']}")
+                        st.write(f"**Time:** {format_time(overall['lap_duration'])}")
+                        
+                        # Get location data for the fastest lap
+                        driver_number = next(d['driver_number'] for d in drivers 
+                                          if f"{d['name_acronym']} ({d['driver_number']})" == overall['driver_name'])
+                        location_data = fetch_location_data(session_key, driver_number)
+                        
+                        # Create and display track map
+                        if location_data:
+                            team_color = next(d['team_colour'] for d in drivers 
+                                            if d['driver_number'] == driver_number)
+                            track_map_html = create_track_map(location_data, overall['driver_name'], f"#{team_color}")
+                            st.components.v1.html(track_map_html, height=600)
+                        else:
+                            st.info("No location data available for this session.")
+                        
+                        # Display all drivers' fastest laps
+                        st.write("#### All Drivers' Fastest Laps")
+                        fastest_laps_df = pd.DataFrame([
+                            {k: v for k, v in data.items() if k != 'driver_name' and k != 'team_name'}
+                            for data in fastest_laps.values()
+                            if data['driver_name'] != overall['driver_name']
+                        ])
+                        fastest_laps_df = fastest_laps_df.sort_values('lap_duration')
+                        st.dataframe(fastest_laps_df, hide_index=True)
+                    else:
+                        st.info("No lap time data available for this session.")
                 else:
                     st.error("Failed to load driver details. Please try again later.")
             else:
