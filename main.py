@@ -381,6 +381,208 @@ def fetch_team_radio(session_key: int, driver_number: int) -> List[Dict]:
         logger.error(f"Error fetching team radio data: {str(e)}")
         return []
 
+@st.cache_resource
+def fetch_car_telemetry(session_key: int, driver_number: int) -> List[Dict]:
+    """Fetch car telemetry data for a specific driver and session."""
+    try:
+        cache_filename = f"car_telemetry_{session_key}_{driver_number}.json"
+        cached_data = load_from_cache(cache_filename)
+        if cached_data:
+            logger.info(f"Loading car telemetry from cache for session {session_key} and driver {driver_number}")
+            return cached_data
+
+        logger.info(f"Fetching car telemetry for session {session_key} and driver {driver_number}")
+        response = requests.get(
+            f"{BASE_URL}/car_data",
+            params={
+                "session_key": session_key,
+                "driver_number": driver_number
+            }
+        )
+        response.raise_for_status()
+        telemetry_data = response.json()
+        if telemetry_data:
+            save_to_cache(telemetry_data, cache_filename)
+        return telemetry_data
+    except Exception as e:
+        logger.error(f"Error fetching car telemetry: {str(e)}")
+        return []
+
+@st.cache_resource
+def fetch_pit_stops(session_key: int) -> List[Dict]:
+    """Fetch pit stop data for a specific session."""
+    try:
+        cache_filename = f"pit_stops_{session_key}.json"
+        cached_data = load_from_cache(cache_filename)
+        if cached_data:
+            logger.info(f"Loading pit stops from cache for session {session_key}")
+            return cached_data
+
+        logger.info(f"Fetching pit stops for session {session_key}")
+        response = requests.get(
+            f"{BASE_URL}/pit",
+            params={"session_key": session_key}
+        )
+        response.raise_for_status()
+        pit_stops = response.json()
+        if pit_stops:
+            save_to_cache(pit_stops, cache_filename)
+        return pit_stops
+    except Exception as e:
+        logger.error(f"Error fetching pit stops: {str(e)}")
+        return []
+
+@st.cache_resource
+def fetch_stints(session_key: int) -> List[Dict]:
+    """Fetch stint data for a specific session."""
+    try:
+        cache_filename = f"stints_{session_key}.json"
+        cached_data = load_from_cache(cache_filename)
+        if cached_data:
+            logger.info(f"Loading stints from cache for session {session_key}")
+            return cached_data
+
+        logger.info(f"Fetching stints for session {session_key}")
+        response = requests.get(
+            f"{BASE_URL}/stints",
+            params={"session_key": session_key}
+        )
+        response.raise_for_status()
+        stints = response.json()
+        if stints:
+            save_to_cache(stints, cache_filename)
+        return stints
+    except Exception as e:
+        logger.error(f"Error fetching stints: {str(e)}")
+        return []
+
+@st.cache_resource
+def fetch_location_data(session_key: int, driver_number: int) -> List[Dict]:
+    """Fetch location data for a specific driver and session."""
+    try:
+        cache_filename = f"location_{session_key}_{driver_number}.json"
+        cached_data = load_from_cache(cache_filename)
+        if cached_data:
+            logger.info(f"Loading location data from cache for session {session_key} and driver {driver_number}")
+            return cached_data
+
+        logger.info(f"Fetching location data for session {session_key} and driver {driver_number}")
+        response = requests.get(
+            f"{BASE_URL}/location",
+            params={
+                "session_key": session_key,
+                "driver_number": driver_number
+            }
+        )
+        response.raise_for_status()
+        location_data = response.json()
+        if location_data:
+            save_to_cache(location_data, cache_filename)
+        return location_data
+    except Exception as e:
+        logger.error(f"Error fetching location data: {str(e)}")
+        return []
+
+def get_fastest_lap_data(session_key: int, lap_times: List[Dict], drivers: List[Dict]) -> Dict:
+    """Get the fastest lap data for each driver and overall."""
+    if not lap_times:
+        return {}
+    
+    # Convert lap times to DataFrame
+    df = pd.DataFrame(lap_times)
+    
+    # Get fastest lap for each driver
+    fastest_laps = {}
+    for driver in drivers:
+        driver_laps = df[df['driver_number'] == driver['driver_number']]
+        if not driver_laps.empty:
+            fastest_lap = driver_laps.loc[driver_laps['lap_duration'].idxmin()]
+            fastest_laps[driver['driver_number']] = {
+                'lap_number': fastest_lap['lap_number'],
+                'lap_duration': fastest_lap['lap_duration'],
+                'driver_name': f"{driver['name_acronym']} ({driver['driver_number']})",
+                'team_name': driver['team_name']
+            }
+    
+    # Get overall fastest lap
+    overall_fastest = df.loc[df['lap_duration'].idxmin()]
+    fastest_laps['overall'] = {
+        'lap_number': overall_fastest['lap_number'],
+        'lap_duration': overall_fastest['lap_duration'],
+        'driver_name': next((f"{d['name_acronym']} ({d['driver_number']})" 
+                           for d in drivers if d['driver_number'] == overall_fastest['driver_number']), 'Unknown'),
+        'team_name': next((d['team_name'] 
+                          for d in drivers if d['driver_number'] == overall_fastest['driver_number']), 'Unknown')
+    }
+    
+    return fastest_laps
+
+def create_track_map(location_data: List[Dict], driver_name: str, team_color: str) -> str:
+    """Create an HTML visualization of the track map with car position."""
+    if not location_data:
+        return ""
+    
+    # Extract x and y coordinates
+    x_coords = [point['x'] for point in location_data]
+    y_coords = [point['y'] for point in location_data]
+    
+    # Create the track map using plotly
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    
+    # Create figure
+    fig = go.Figure()
+    
+    # Add track line
+    fig.add_trace(go.Scatter(
+        x=x_coords,
+        y=y_coords,
+        mode='lines',
+        line=dict(color='#666666', width=2),
+        name='Track'
+    ))
+    
+    # Add car position
+    fig.add_trace(go.Scatter(
+        x=[x_coords[-1]],
+        y=[y_coords[-1]],
+        mode='markers',
+        marker=dict(
+            size=15,
+            color=team_color,
+            symbol='circle'
+        ),
+        name=driver_name
+    ))
+    
+    # Update layout
+    fig.update_layout(
+        title=f"Track Map - {driver_name}",
+        showlegend=True,
+        width=800,
+        height=600,
+        margin=dict(l=0, r=0, t=30, b=0)
+    )
+    
+    # Convert to HTML
+    return fig.to_html(full_html=False)
+
+def process_telemetry_data(telemetry_data: List[Dict]) -> pd.DataFrame:
+    """Process raw telemetry data into a pandas DataFrame."""
+    if not telemetry_data:
+        return pd.DataFrame()
+    
+    # Convert to DataFrame
+    df = pd.DataFrame(telemetry_data)
+    
+    # Convert date strings to datetime
+    df['date'] = pd.to_datetime(df['date'])
+    
+    # Add DRS status text
+    df['drs_status'] = df['drs'].map(DRS_STATUS)
+    
+    return df
+
 def get_latest_positions(positions: List[Dict]) -> Dict[int, int]:
     """Get the latest position for each driver."""
     latest_positions = {}
@@ -490,6 +692,42 @@ def get_latest_session_data() -> tuple:
         logger.error(f"Error getting latest session data: {str(e)}")
         return None, None, None
 
+def process_pit_stops(pit_stops: List[Dict], drivers: List[Dict]) -> pd.DataFrame:
+    """Process pit stop data into a pandas DataFrame with driver information."""
+    if not pit_stops:
+        return pd.DataFrame()
+    
+    # Convert to DataFrame
+    df = pd.DataFrame(pit_stops)
+    
+    # Convert date strings to datetime
+    df['date'] = pd.to_datetime(df['date'])
+    
+    # Add driver information
+    driver_info = {d['driver_number']: d for d in drivers}
+    df['driver_name'] = df['driver_number'].map(lambda x: f"{driver_info[x]['name_acronym']} ({x})")
+    df['team_name'] = df['driver_number'].map(lambda x: driver_info[x]['team_name'])
+    
+    return df
+
+def process_stints(stints: List[Dict], drivers: List[Dict]) -> pd.DataFrame:
+    """Process stint data into a pandas DataFrame with driver information."""
+    if not stints:
+        return pd.DataFrame()
+    
+    # Convert to DataFrame
+    df = pd.DataFrame(stints)
+    
+    # Add driver information
+    driver_info = {d['driver_number']: d for d in drivers}
+    df['driver_name'] = df['driver_number'].map(lambda x: f"{driver_info[x]['name_acronym']} ({x})")
+    df['team_name'] = df['driver_number'].map(lambda x: driver_info[x]['team_name'])
+    
+    # Calculate stint length
+    df['stint_length'] = df['lap_end'] - df['lap_start'] + 1
+    
+    return df
+
 def main():
     st.set_page_config(layout="wide", page_title="F1 Dashboard")
     
@@ -575,8 +813,8 @@ def main():
         # Sessions View
         st.write("### Session Selection")
         
-        # Create three columns for sub-navigation
-        sub_nav_col1, sub_nav_col2, sub_nav_col3 = st.columns(3)
+        # Create seven columns for sub-navigation
+        sub_nav_col1, sub_nav_col2, sub_nav_col3, sub_nav_col4, sub_nav_col5, sub_nav_col6, sub_nav_col7 = st.columns(7)
         
         with sub_nav_col1:
             if st.button("📊 Session Info", key="session_info_nav", use_container_width=True):
@@ -589,6 +827,22 @@ def main():
         with sub_nav_col3:
             if st.button("📻 Team Radio", key="team_radio_nav", use_container_width=True):
                 st.session_state.current_subview = "team_radio"
+            
+        with sub_nav_col4:
+            if st.button("📈 Telemetry", key="telemetry_nav", use_container_width=True):
+                st.session_state.current_subview = "telemetry"
+            
+        with sub_nav_col5:
+            if st.button("🛑 Pit Stops", key="pit_stops_nav", use_container_width=True):
+                st.session_state.current_subview = "pit_stops"
+            
+        with sub_nav_col6:
+            if st.button("🔄 Tyre Stints", key="stints_nav", use_container_width=True):
+                st.session_state.current_subview = "stints"
+            
+        with sub_nav_col7:
+            if st.button("🗺️ Track Map", key="track_map_nav", use_container_width=True):
+                st.session_state.current_subview = "track_map"
         
         # Session selection controls
         col1, col2, col3 = st.columns(3)
@@ -776,7 +1030,7 @@ def main():
             else:
                 st.error("Failed to fetch session key. Please try again later.")
         
-        else:  # Team Radio view
+        elif st.session_state.current_subview == "team_radio":
             st.write("### Team Radio Messages")
             if session_key:
                 drivers = fetch_drivers(session_key)
@@ -817,6 +1071,203 @@ def main():
                                     st.audio(msg['recording_url'])
                             else:
                                 st.info("No radio messages available")
+                else:
+                    st.error("Failed to load driver details. Please try again later.")
+            else:
+                st.error("Failed to fetch session key. Please try again later.")
+        
+        elif st.session_state.current_subview == "telemetry":
+            st.write("### Car Telemetry")
+            if session_key:
+                drivers = fetch_drivers(session_key)
+                if drivers:
+                    # Create a dropdown for driver selection
+                    driver_options = {f"{driver['driver_number']} - {driver['name_acronym']}": driver['driver_number'] 
+                                    for driver in drivers}
+                    selected_driver = st.selectbox("Select Driver", list(driver_options.keys()))
+                    driver_number = driver_options[selected_driver]
+                    
+                    # Fetch and process telemetry data
+                    telemetry_data = fetch_car_telemetry(session_key, driver_number)
+                    if telemetry_data:
+                        df = process_telemetry_data(telemetry_data)
+                        
+                        # Create columns for different metrics
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.write("#### Speed")
+                            st.line_chart(df.set_index('date')['speed'])
+                            
+                            st.write("#### RPM")
+                            st.line_chart(df.set_index('date')['rpm'])
+                            
+                        with col2:
+                            st.write("#### Throttle & Brake")
+                            throttle_brake = df[['date', 'throttle', 'brake']].set_index('date')
+                            st.line_chart(throttle_brake)
+                            
+                            st.write("#### DRS Status")
+                            drs_data = df[['date', 'drs_status']].set_index('date')
+                            st.line_chart(drs_data)
+                        
+                        # Display gear selection
+                        st.write("#### Gear Selection")
+                        gear_data = df[['date', 'n_gear']].set_index('date')
+                        st.line_chart(gear_data)
+                    else:
+                        st.info("No telemetry data available for this session.")
+                else:
+                    st.error("Failed to load driver details. Please try again later.")
+            else:
+                st.error("Failed to fetch session key. Please try again later.")
+        
+        elif st.session_state.current_subview == "pit_stops":
+            st.write("### Pit Stop Analysis")
+            if session_key:
+                drivers = fetch_drivers(session_key)
+                if drivers:
+                    pit_stops = fetch_pit_stops(session_key)
+                    if pit_stops:
+                        df = process_pit_stops(pit_stops, drivers)
+                        
+                        # Display overall statistics
+                        st.write("#### Overall Statistics")
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Total Pit Stops", len(df))
+                        with col2:
+                            st.metric("Average Stop Time", f"{df['pit_duration'].mean():.1f}s")
+                        with col3:
+                            st.metric("Fastest Stop", f"{df['pit_duration'].min():.1f}s")
+                        
+                        # Display pit stop timeline
+                        st.write("#### Pit Stop Timeline")
+                        timeline_data = df[['date', 'driver_name', 'pit_duration', 'lap_number']].copy()
+                        timeline_data['date'] = timeline_data['date'].dt.strftime('%H:%M:%S')
+                        st.dataframe(timeline_data, hide_index=True)
+                        
+                        # Display team-wise analysis
+                        st.write("#### Team Analysis")
+                        team_stats = df.groupby('team_name').agg({
+                            'pit_duration': ['count', 'mean', 'min']
+                        }).round(2)
+                        team_stats.columns = ['Total Stops', 'Average Duration', 'Fastest Stop']
+                        st.dataframe(team_stats)
+                        
+                        # Display driver-wise analysis
+                        st.write("#### Driver Analysis")
+                        driver_stats = df.groupby('driver_name').agg({
+                            'pit_duration': ['count', 'mean', 'min']
+                        }).round(2)
+                        driver_stats.columns = ['Total Stops', 'Average Duration', 'Fastest Stop']
+                        st.dataframe(driver_stats)
+                    else:
+                        st.info("No pit stop data available for this session.")
+                else:
+                    st.error("Failed to load driver details. Please try again later.")
+            else:
+                st.error("Failed to fetch session key. Please try again later.")
+        
+        elif st.session_state.current_subview == "stints":
+            st.write("### Tyre Stint Analysis")
+            if session_key:
+                drivers = fetch_drivers(session_key)
+                if drivers:
+                    stints = fetch_stints(session_key)
+                    if stints:
+                        df = process_stints(stints, drivers)
+                        
+                        # Display overall statistics
+                        st.write("#### Overall Statistics")
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Total Stints", len(df))
+                        with col2:
+                            st.metric("Average Stint Length", f"{df['stint_length'].mean():.1f} laps")
+                        with col3:
+                            st.metric("Longest Stint", f"{df['stint_length'].max()} laps")
+                        
+                        # Display stint timeline
+                        st.write("#### Stint Timeline")
+                        timeline_data = df[['driver_name', 'compound', 'lap_start', 'lap_end', 'stint_length']].copy()
+                        timeline_data = timeline_data.sort_values('lap_start')
+                        st.dataframe(timeline_data, hide_index=True)
+                        
+                        # Display compound analysis
+                        st.write("#### Compound Analysis")
+                        compound_stats = df.groupby('compound').agg({
+                            'stint_length': ['count', 'mean', 'max']
+                        }).round(2)
+                        compound_stats.columns = ['Total Stints', 'Average Length', 'Longest Stint']
+                        st.dataframe(compound_stats)
+                        
+                        # Display team-wise analysis
+                        st.write("#### Team Analysis")
+                        team_stats = df.groupby('team_name').agg({
+                            'stint_length': ['count', 'mean', 'max']
+                        }).round(2)
+                        team_stats.columns = ['Total Stints', 'Average Length', 'Longest Stint']
+                        st.dataframe(team_stats)
+                        
+                        # Display driver-wise analysis
+                        st.write("#### Driver Analysis")
+                        driver_stats = df.groupby('driver_name').agg({
+                            'stint_length': ['count', 'mean', 'max']
+                        }).round(2)
+                        driver_stats.columns = ['Total Stints', 'Average Length', 'Longest Stint']
+                        st.dataframe(driver_stats)
+                    else:
+                        st.info("No stint data available for this session.")
+                else:
+                    st.error("Failed to load driver details. Please try again later.")
+            else:
+                st.error("Failed to fetch session key. Please try again later.")
+        
+        elif st.session_state.current_subview == "track_map":
+            st.write("### Track Map - Fastest Laps")
+            if session_key:
+                drivers = fetch_drivers(session_key)
+                if drivers:
+                    # Get lap times
+                    lap_times = fetch_lap_times(session_key)
+                    if lap_times:
+                        # Get fastest lap data
+                        fastest_laps = get_fastest_lap_data(session_key, lap_times, drivers)
+                        
+                        # Display overall fastest lap
+                        st.write("#### Overall Fastest Lap")
+                        overall = fastest_laps['overall']
+                        st.write(f"**Driver:** {overall['driver_name']}")
+                        st.write(f"**Team:** {overall['team_name']}")
+                        st.write(f"**Lap:** {overall['lap_number']}")
+                        st.write(f"**Time:** {format_time(overall['lap_duration'])}")
+                        
+                        # Get location data for the fastest lap
+                        driver_number = next(d['driver_number'] for d in drivers 
+                                          if f"{d['name_acronym']} ({d['driver_number']})" == overall['driver_name'])
+                        location_data = fetch_location_data(session_key, driver_number)
+                        
+                        # Create and display track map
+                        if location_data:
+                            team_color = next(d['team_colour'] for d in drivers 
+                                            if d['driver_number'] == driver_number)
+                            track_map_html = create_track_map(location_data, overall['driver_name'], f"#{team_color}")
+                            st.components.v1.html(track_map_html, height=600)
+                        else:
+                            st.info("No location data available for this session.")
+                        
+                        # Display all drivers' fastest laps
+                        st.write("#### All Drivers' Fastest Laps")
+                        fastest_laps_df = pd.DataFrame([
+                            {k: v for k, v in data.items() if k != 'driver_name' and k != 'team_name'}
+                            for data in fastest_laps.values()
+                            if data['driver_name'] != overall['driver_name']
+                        ])
+                        fastest_laps_df = fastest_laps_df.sort_values('lap_duration')
+                        st.dataframe(fastest_laps_df, hide_index=True)
+                    else:
+                        st.info("No lap time data available for this session.")
                 else:
                     st.error("Failed to load driver details. Please try again later.")
             else:
