@@ -839,10 +839,6 @@ def main():
         with sub_nav_col6:
             if st.button("🔄 Tyre Stints", key="stints_nav", use_container_width=True):
                 st.session_state.current_subview = "stints"
-            
-        with sub_nav_col7:
-            if st.button("🗺️ Track Map", key="track_map_nav", use_container_width=True):
-                st.session_state.current_subview = "track_map"
         
         # Session selection controls
         col1, col2, col3 = st.columns(3)
@@ -1219,55 +1215,6 @@ def main():
                         st.dataframe(driver_stats)
                     else:
                         st.info("No stint data available for this session.")
-                else:
-                    st.error("Failed to load driver details. Please try again later.")
-            else:
-                st.error("Failed to fetch session key. Please try again later.")
-        
-        elif st.session_state.current_subview == "track_map":
-            st.write("### Track Map - Fastest Laps")
-            if session_key:
-                drivers = fetch_drivers(session_key)
-                if drivers:
-                    # Get lap times
-                    lap_times = fetch_lap_times(session_key)
-                    if lap_times:
-                        # Get fastest lap data
-                        fastest_laps = get_fastest_lap_data(session_key, lap_times, drivers)
-                        
-                        # Display overall fastest lap
-                        st.write("#### Overall Fastest Lap")
-                        overall = fastest_laps['overall']
-                        st.write(f"**Driver:** {overall['driver_name']}")
-                        st.write(f"**Team:** {overall['team_name']}")
-                        st.write(f"**Lap:** {overall['lap_number']}")
-                        st.write(f"**Time:** {format_time(overall['lap_duration'])}")
-                        
-                        # Get location data for the fastest lap
-                        driver_number = next(d['driver_number'] for d in drivers 
-                                          if f"{d['name_acronym']} ({d['driver_number']})" == overall['driver_name'])
-                        location_data = fetch_location_data(session_key, driver_number)
-                        
-                        # Create and display track map
-                        if location_data:
-                            team_color = next(d['team_colour'] for d in drivers 
-                                            if d['driver_number'] == driver_number)
-                            track_map_html = create_track_map(location_data, overall['driver_name'], f"#{team_color}")
-                            st.components.v1.html(track_map_html, height=600)
-                        else:
-                            st.info("No location data available for this session.")
-                        
-                        # Display all drivers' fastest laps
-                        st.write("#### All Drivers' Fastest Laps")
-                        fastest_laps_df = pd.DataFrame([
-                            {k: v for k, v in data.items() if k != 'driver_name' and k != 'team_name'}
-                            for data in fastest_laps.values()
-                            if data['driver_name'] != overall['driver_name']
-                        ])
-                        fastest_laps_df = fastest_laps_df.sort_values('lap_duration')
-                        st.dataframe(fastest_laps_df, hide_index=True)
-                    else:
-                        st.info("No lap time data available for this session.")
                 else:
                     st.error("Failed to load driver details. Please try again later.")
             else:
