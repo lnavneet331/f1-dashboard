@@ -509,6 +509,177 @@ def fetch_session_details(session_key: int) -> Dict:
         logger.error(f"Error fetching session details: {str(e)}")
         return None
 
+@st.cache_resource
+def fetch_driver_standings(season: int = None) -> List[Dict]:
+    """Fetch driver championship standings for a specific season."""
+    try:
+        if not season:
+            season = datetime.now().year  # Default to current year
+            
+        cache_filename = f"driver_standings_{season}.json"
+        cached_data = load_from_cache(cache_filename)
+        if cached_data:
+            logger.info(f"Loading driver standings from cache for season {season}")
+            return cached_data
+
+        logger.info(f"Fetching driver standings for season {season}")
+        
+        # We'll need to calculate this from race results since OpenF1 doesn't provide standings directly
+        # Get all races for the season
+        rounds = fetch_rounds(season)
+        if not rounds:
+            return []
+        
+        # Initialize driver points dictionary
+        driver_points = {}
+        driver_info = {}
+        
+        # Process each race to accumulate points
+        for round_info in rounds:
+            meeting_key = round_info.get('meeting_key')
+            if not meeting_key:
+                continue
+                
+            # Get race session key (if exists)
+            session_types = fetch_session_types(meeting_key)
+            race_session = None
+            
+            # Find race or sprint session for points
+            for session_priority in ['Race', 'Sprint']:
+                if session_priority in session_types:
+                    race_session = session_priority
+                    session_key = fetch_session_key(meeting_key, race_session)
+                    
+                    # Get drivers and results
+                    drivers = fetch_drivers(session_key)
+                    positions = fetch_positions(session_key)
+                    
+                    if not drivers or not positions:
+                        continue
+                    
+                    # Get final positions
+                    latest_positions = get_latest_positions(positions)
+                    
+                    # Points for regular race positions (1st to 10th)
+                    race_points = [25, 18, 15, 12, 10, 8, 6, 4, 2, 1] if race_session == 'Race' else [8, 7, 6, 5, 4, 3, 2, 1]
+                    
+                    # Award points based on positions
+                    for driver in drivers:
+                        driver_number = driver['driver_number']
+                        position = latest_positions.get(driver_number)
+                        
+                        # Store driver info
+                        if driver_number not in driver_info:
+                            driver_info[driver_number] = {
+                                'name': driver['full_name'],
+                                'name_acronym': driver['name_acronym'],
+                                'team': driver['team_name'],
+                                'team_color': f"#{driver['team_colour']}"
+                            }
+                        
+                        # Calculate points
+                        points = 0
+                        if position and 1 <= position <= len(race_points):
+                            points = race_points[position-1]
+                            
+                        # Add to driver's total
+                        if driver_number not in driver_points:
+                            driver_points[driver_number] = 0
+                        driver_points[driver_number] += points
+        
+        # Compile standings
+        standings = []
+        for driver_number, points in driver_points.items():
+            if driver_number in driver_info:
+                standings.append({
+                    'driver_number': driver_number,
+                    'name': driver_info[driver_number]['name'],
+                    'name_acronym': driver_info[driver_number]['name_acronym'],
+                    'team': driver_info[driver_number]['team'],
+                    'team_color': driver_info[driver_number]['team_color'],
+                    'points': points
+                })
+        
+        # Sort by points (descending)
+        standings = sorted(standings, key=lambda x: x['points'], reverse=True)
+        
+        # Add position information
+        for i, driver in enumerate(standings, 1):
+            driver['position'] = i
+        
+        # Cache the results
+        save_to_cache(standings, cache_filename)
+        return standings
+    except Exception as e:
+        logger.error(f"Error fetching driver standings: {str(e)}")
+        return []
+
+@st.cache_resource
+def fetch_constructor_standings(season: int = None) -> List[Dict]:
+    """Fetch constructor championship standings for a specific season."""
+    try:
+        if not season:
+            season = datetime.now().year  # Default to current year
+            
+        cache_filename = f"constructor_standings_{season}.json"
+        cached_data = load_from_cache(cache_filename)
+        if cached_data:
+            logger.info(f"Loading constructor standings from cache for season {season}")
+            return cached_data
+
+        logger.info(f"Fetching constructor standings for season {season}")
+        
+        # Get driver standings first
+        driver_standings = fetch_driver_standings(season)
+        if not driver_standings:
+            return []
+        
+        # Group points by team
+        team_points = {}
+        team_colors = {}
+        team_drivers = {}
+        
+        for driver in driver_standings:
+            team = driver['team']
+            points = driver['points']
+            
+            if team not in team_points:
+                team_points[team] = 0
+                team_colors[team] = driver['team_color']
+                team_drivers[team] = []
+                
+            team_points[team] += points
+            team_drivers[team].append({
+                'name': driver['name'],
+                'name_acronym': driver['name_acronym'],
+                'driver_number': driver['driver_number'],
+                'points': driver['points']
+            })
+        
+        # Compile standings
+        standings = []
+        for team, points in team_points.items():
+            standings.append({
+                'team': team,
+                'points': points,
+                'team_color': team_colors[team],
+                'drivers': team_drivers[team]
+            })
+        
+        # Sort by points (descending)
+        standings = sorted(standings, key=lambda x: x['points'], reverse=True)
+        
+        # Add position information
+        for i, team in enumerate(standings, 1):
+            team['position'] = i
+        
+        # Cache the results
+        save_to_cache(standings, cache_filename)
+        return standings
+    except Exception as e:
+        logger.error(f"Error fetching constructor standings: {str(e)}")
+        return []
+
 def process_telemetry_data(telemetry_data: List[Dict], session_key: int, resampling_interval: str = '1S') -> pd.DataFrame:
     """Process raw telemetry data into a pandas DataFrame and trim to session duration."""
     if not telemetry_data:
@@ -587,56 +758,6 @@ def get_fastest_lap_data(session_key: int, lap_times: List[Dict], drivers: List[
     }
     
     return fastest_laps
-
-def create_track_map(location_data: List[Dict], driver_name: str, team_color: str) -> str:
-    """Create an HTML visualization of the track map with car position."""
-    if not location_data:
-        return ""
-    
-    # Extract x and y coordinates
-    x_coords = [point['x'] for point in location_data]
-    y_coords = [point['y'] for point in location_data]
-    
-    # Create the track map using plotly
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
-    
-    # Create figure
-    fig = go.Figure()
-    
-    # Add track line
-    fig.add_trace(go.Scatter(
-        x=x_coords,
-        y=y_coords,
-        mode='lines',
-        line=dict(color='#666666', width=2),
-        name='Track'
-    ))
-    
-    # Add car position
-    fig.add_trace(go.Scatter(
-        x=[x_coords[-1]],
-        y=[y_coords[-1]],
-        mode='markers',
-        marker=dict(
-            size=15,
-            color=team_color,
-            symbol='circle'
-        ),
-        name=driver_name
-    ))
-    
-    # Update layout
-    fig.update_layout(
-        title=f"Track Map - {driver_name}",
-        showlegend=True,
-        width=800,
-        height=600,
-        margin=dict(l=0, r=0, t=30, b=0)
-    )
-    
-    # Convert to HTML
-    return fig.to_html(full_html=False)
 
 def get_latest_positions(positions: List[Dict]) -> Dict[int, int]:
     """Get the latest position for each driver."""
@@ -783,6 +904,189 @@ def process_stints(stints: List[Dict], drivers: List[Dict]) -> pd.DataFrame:
     
     return df
 
+def display_driver_standings(driver_standings: List[Dict]):
+    """Display driver standings in a styled table."""
+    if not driver_standings:
+        st.info("No driver standings data available.")
+        return
+    
+    # Create DataFrame
+    df = pd.DataFrame(driver_standings)
+    
+    # Prepare data for display
+    display_data = []
+    for _, row in df.iterrows():
+        display_data.append({
+            'Position': row['position'],
+            'Driver': f"{row['name_acronym']} ({row['driver_number']})",
+            'Name': row['name'],
+            'Team': row['team'],
+            'Points': row['points']
+        })
+    
+    # Create DataFrame for display
+    display_df = pd.DataFrame(display_data)
+    
+    # Apply styling
+    styled_df = display_df.style
+    
+    # Apply position styling
+    def color_position(val):
+        if val == 1:
+            return 'background-color: gold; color: black; font-weight: bold; text-align: center; border-radius: 4px;'
+        elif val == 2:
+            return 'background-color: silver; color: black; font-weight: bold; text-align: center; border-radius: 4px;'
+        elif val == 3:
+            return 'background-color: #CD7F32; color: black; font-weight: bold; text-align: center; border-radius: 4px;'
+        return 'text-align: center;'
+    
+    styled_df = styled_df.applymap(color_position, subset=['Position'])
+    
+    # Apply team colors to team cells
+    def color_team(val, teams):
+        for team_data in teams:
+            if val == team_data['team']:
+                team_color = team_data['team_color']
+                # Convert hex to RGB to determine if background is light or dark
+                hex_color = team_color.lstrip('#')
+                rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
+                text_color = 'white' if luminance < 0.5 else 'black'
+                return f'background-color: {team_color}; color: {text_color}; font-weight: bold; border-radius: 4px; padding: 8px 12px;'
+        return ''
+    
+    # Create a lookup dictionary for team colors
+    team_data = [{'team': row['team'], 'team_color': row['team_color']} for _, row in df.iterrows()]
+    
+    # Apply team color function
+    styled_df = styled_df.applymap(lambda x: color_team(x, team_data), subset=['Team'])
+    
+    # Apply points styling
+    def color_points(val):
+        if val > 0:
+            return 'font-weight: bold;'
+        return ''
+    
+    styled_df = styled_df.applymap(color_points, subset=['Points'])
+    
+    # Set table properties
+    styled_df = styled_df.set_table_attributes('class="f1-table"')
+    
+    # Display the table
+    st.dataframe(styled_df, hide_index=True, use_container_width=True)
+
+def display_constructor_standings(constructor_standings: List[Dict]):
+    """Display constructor standings in a styled table."""
+    if not constructor_standings:
+        st.info("No constructor standings data available.")
+        return
+    
+    # Create DataFrame
+    display_data = []
+    for team in constructor_standings:
+        display_data.append({
+            'Position': team['position'],
+            'Team': team['team'],
+            'Drivers': ', '.join([f"{driver['name_acronym']}" for driver in team['drivers']]),
+            'Points': team['points']
+        })
+    
+    # Create DataFrame for display
+    display_df = pd.DataFrame(display_data)
+    
+    # Apply styling
+    styled_df = display_df.style
+    
+    # Apply position styling
+    def color_position(val):
+        if val == 1:
+            return 'background-color: gold; color: black; font-weight: bold; text-align: center; border-radius: 4px;'
+        elif val == 2:
+            return 'background-color: silver; color: black; font-weight: bold; text-align: center; border-radius: 4px;'
+        elif val == 3:
+            return 'background-color: #CD7F32; color: black; font-weight: bold; text-align: center; border-radius: 4px;'
+        return 'text-align: center;'
+    
+    styled_df = styled_df.applymap(color_position, subset=['Position'])
+    
+    # Apply team colors to team cells
+    def color_team(val, teams):
+        for team_data in teams:
+            if val == team_data['team']:
+                team_color = team_data['team_color']
+                # Convert hex to RGB to determine if background is light or dark
+                hex_color = team_color.lstrip('#')
+                rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
+                text_color = 'white' if luminance < 0.5 else 'black'
+                return f'background-color: {team_color}; color: {text_color}; font-weight: bold; border-radius: 4px; padding: 8px 12px;'
+        return ''
+    
+    # Apply team color function
+    styled_df = styled_df.applymap(lambda x: color_team(x, constructor_standings), subset=['Team'])
+    
+    # Apply points styling
+    def color_points(val):
+        if val > 0:
+            return 'font-weight: bold;'
+        return ''
+    
+    styled_df = styled_df.applymap(color_points, subset=['Points'])
+    
+    # Set table properties
+    styled_df = styled_df.set_table_attributes('class="f1-table"')
+    
+    # Display the table
+    st.dataframe(styled_df, hide_index=True, use_container_width=True)
+
+def display_team_details(constructor_standings: List[Dict]):
+    """Display detailed information for each team."""
+    if not constructor_standings:
+        st.info("No constructor data available.")
+        return
+    
+    # Display each team in a card with its drivers
+    for team in constructor_standings:
+        # Create a card with team color
+        team_color = team['team_color']
+        hex_color = team_color.lstrip('#')
+        rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
+        text_color = 'white' if luminance < 0.5 else 'black'
+        
+        st.markdown(
+            f"""
+            <div style="
+                background-color: {team_color};
+                color: {text_color};
+                padding: 20px;
+                border-radius: 10px;
+                margin-bottom: 20px;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            ">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3 style="margin: 0;">{team['position']}. {team['team']}</h3>
+                    <h3 style="margin: 0;">{team['points']} pts</h3>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        
+        # Create a table for the team's drivers
+        driver_data = []
+        for driver in team['drivers']:
+            driver_data.append({
+                'Driver': f"{driver['name_acronym']} ({driver['driver_number']})",
+                'Name': driver['name'],
+                'Points': driver['points']
+            })
+        
+        # Display driver table
+        driver_df = pd.DataFrame(driver_data)
+        styled_df = driver_df.style.set_table_attributes('class="f1-table"')
+        st.dataframe(styled_df, hide_index=True, use_container_width=True)
+
 def main():
     st.set_page_config(layout="wide", page_title="F1 Dashboard")
     
@@ -819,6 +1123,82 @@ def main():
         }
         .active-button {
             background-color: #FF1801 !important;
+        }
+        
+        /* Table styling improvements */
+        .dataframe {
+            width: 100% !important;
+            border-collapse: separate !important;
+            border-spacing: 0 !important;
+            border-radius: 10px !important;
+            overflow: hidden !important;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1) !important;
+        }
+        .dataframe th {
+            background-color: #FF1801 !important;
+            color: white !important;
+            font-weight: bold !important;
+            text-align: left !important;
+            padding: 12px 15px !important;
+            border-bottom: 2px solid #ddd !important;
+            font-size: 1.1em !important;
+        }
+        .dataframe td {
+            padding: 10px 15px !important;
+            border-bottom: 1px solid #ddd !important;
+            font-size: 1em !important;
+            transition: background-color 0.3s ease !important;
+        }
+        .dataframe tr:nth-child(even) {
+            background-color: #f2f2f2 !important;
+        }
+        .dataframe tr:nth-child(odd) {
+            background-color: #ffffff !important;
+        }
+        .dataframe tr:hover td {
+            background-color: #e6e6e6 !important;
+        }
+        .dataframe tr:last-child td {
+            border-bottom: 0 !important;
+        }
+        
+        /* Responsive table for mobile */
+        @media screen and (max-width: 768px) {
+            .dataframe th, .dataframe td {
+                padding: 8px 10px !important;
+                font-size: 0.9em !important;
+            }
+        }
+        
+        /* Timeline table specific styles */
+        .timeline-table {
+            width: 100% !important;
+        }
+        .timeline-table td {
+            vertical-align: middle !important;
+        }
+        
+        /* Custom styling for F1 themed tables */
+        .f1-table th {
+            background-color: #15151E !important; 
+            color: #FFFFFF !important;
+            border-bottom: 3px solid #FF1801 !important;
+        }
+        .f1-table tr:nth-child(even) {
+            background-color: #F8F8F8 !important;
+        }
+        .f1-table tr:nth-child(odd) {
+            background-color: #FFFFFF !important;
+        }
+        
+        /* Section headers */
+        .section-header {
+            color: #FF1801;
+            font-weight: bold;
+            border-bottom: 2px solid #FF1801;
+            padding-bottom: 8px;
+            margin-top: 25px;
+            margin-bottom: 15px;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -868,8 +1248,8 @@ def main():
         # Sessions View
         st.write("### Session Selection")
         
-        # Create seven columns for sub-navigation
-        sub_nav_col1, sub_nav_col2, sub_nav_col3, sub_nav_col4, sub_nav_col5, sub_nav_col6, sub_nav_col7 = st.columns(7)
+        # Create six columns for sub-navigation (removed track map nav)
+        sub_nav_col1, sub_nav_col2, sub_nav_col3, sub_nav_col4, sub_nav_col5, sub_nav_col6 = st.columns(6)
         
         with sub_nav_col1:
             if st.button("📊 Session Info", key="session_info_nav", use_container_width=True):
@@ -894,10 +1274,6 @@ def main():
         with sub_nav_col6:
             if st.button("🔄 Tyre Stints", key="stints_nav", use_container_width=True):
                 st.session_state.current_subview = "stints"
-            
-        with sub_nav_col7:
-            if st.button("🗺️ Track Map", key="track_map_nav", use_container_width=True):
-                st.session_state.current_subview = "track_map"
         
         # Session selection controls
         col1, col2, col3 = st.columns(3)
@@ -991,7 +1367,7 @@ def main():
                         df = pd.DataFrame(leaderboard_data)
                         df = df.sort_values('Position')
                         
-                        st.write("### Leaderboard")
+                        st.markdown('<p class="section-header">LEADERBOARD</p>', unsafe_allow_html=True)
                         
                         # Create a dictionary of driver numbers to team colors
                         driver_colors = {driver['driver_number']: f"#{driver['team_colour']}" 
@@ -1012,7 +1388,7 @@ def main():
                                     luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
                                     # Use white text for dark backgrounds, black for light backgrounds
                                     text_color = 'white' if luminance < 0.5 else 'black'
-                                    return f'background-color: {team_color}; color: {text_color};'
+                                    return f'background-color: {team_color}; color: {text_color}; font-weight: bold; border-radius: 4px; padding: 8px 12px;'
                             return ''
                         
                         # Apply team colors to all driver cells
@@ -1021,21 +1397,44 @@ def main():
                         # Apply position change colors for race/sprint sessions
                         def color_position_change(val):
                             if val.startswith('+'):
-                                return 'color: green'
+                                return 'color: green; font-weight: bold;'
                             elif val.startswith('-'):
-                                return 'color: red'
+                                return 'color: red; font-weight: bold;'
                             return ''
                         
                         if is_race_session:
                             styled_df = styled_df.applymap(color_position_change, subset=['Pos Change'])
                         
+                        # Apply position styling
+                        def color_position(val):
+                            if val == 1:
+                                return 'background-color: gold; color: black; font-weight: bold; text-align: center; border-radius: 4px;'
+                            elif val == 2:
+                                return 'background-color: silver; color: black; font-weight: bold; text-align: center; border-radius: 4px;'
+                            elif val == 3:
+                                return 'background-color: #CD7F32; color: black; font-weight: bold; text-align: center; border-radius: 4px;'
+                            return 'text-align: center;'
+                        
+                        styled_df = styled_df.applymap(color_position, subset=['Position'])
+                        
+                        # Apply gap styling
+                        def color_gap(val):
+                            if val == 'Leader':
+                                return 'color: gold; font-weight: bold;'
+                            return ''
+                        
+                        styled_df = styled_df.applymap(color_gap, subset=['Gap'])
+                        
+                        # Set table properties
+                        styled_df = styled_df.set_table_attributes('class="f1-table"')
+                        
                         # Display the styled DataFrame
-                        st.dataframe(styled_df, hide_index=True)
+                        st.dataframe(styled_df, hide_index=True, use_container_width=True)
                     else:
                         st.error("Failed to load leaderboard data. Please try again later.")
                 else:
                     st.error("Failed to fetch session key. Please try again later.")
-        
+                
         elif st.session_state.current_subview == "race_control":
             st.write("### Race Control Messages")
             if session_key:
@@ -1198,7 +1597,7 @@ def main():
                 st.error("Failed to fetch session key. Please try again later.")
         
         elif st.session_state.current_subview == "pit_stops":
-            st.write("### Pit Stop Analysis")
+            st.markdown('<p class="section-header">PIT STOP ANALYSIS</p>', unsafe_allow_html=True)
             if session_key:
                 drivers = fetch_drivers(session_key)
                 if drivers:
@@ -1207,7 +1606,7 @@ def main():
                         df = process_pit_stops(pit_stops, drivers)
                         
                         # Display overall statistics
-                        st.write("#### Overall Statistics")
+                        st.markdown('<p class="section-header">OVERALL STATISTICS</p>', unsafe_allow_html=True)
                         col1, col2, col3 = st.columns(3)
                         with col1:
                             st.metric("Total Pit Stops", len(df))
@@ -1217,26 +1616,93 @@ def main():
                             st.metric("Fastest Stop", f"{df['pit_duration'].min():.1f}s")
                         
                         # Display pit stop timeline
-                        st.write("#### Pit Stop Timeline")
+                        st.markdown('<p class="section-header">PIT STOP TIMELINE</p>', unsafe_allow_html=True)
                         timeline_data = df[['date', 'driver_name', 'pit_duration', 'lap_number']].copy()
                         timeline_data['date'] = timeline_data['date'].dt.strftime('%H:%M:%S')
-                        st.dataframe(timeline_data, hide_index=True)
+                        
+                        # Style timeline table
+                        styled_timeline = timeline_data.style.set_table_attributes('class="timeline-table f1-table"')
+                        
+                        # Apply styling to pit duration based on speed
+                        def color_pit_duration(val):
+                            """Color code pit stop duration - faster stops are greener"""
+                            if val < 2.5:  # Extraordinary stop
+                                return 'background-color: #00FF00; color: black; font-weight: bold;'
+                            elif val < 3.0:  # Very fast stop
+                                return 'background-color: #66FF66; color: black; font-weight: bold;'
+                            elif val < 4.0:  # Good stop
+                                return 'background-color: #99FF99; color: black;'
+                            elif val > 6.0:  # Slow stop
+                                return 'background-color: #FFCCCC; color: black;'
+                            return ''
+                        
+                        styled_timeline = styled_timeline.applymap(color_pit_duration, subset=['pit_duration'])
+                        
+                        # Add driver team colors
+                        driver_colors = {f"{d['name_acronym']} ({d['driver_number']})": f"#{d['team_colour']}" 
+                                       for d in drivers}
+                        
+                        def color_driver_cell(val):
+                            """Apply team color to driver name cell"""
+                            for driver_name, team_color in driver_colors.items():
+                                if val == driver_name:
+                                    # Convert hex to RGB to determine if background is light or dark
+                                    hex_color = team_color.lstrip('#')
+                                    rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                                    # Calculate relative luminance
+                                    luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
+                                    # Use white text for dark backgrounds, black for light backgrounds
+                                    text_color = 'white' if luminance < 0.5 else 'black'
+                                    return f'background-color: {team_color}; color: {text_color}; font-weight: bold; border-radius: 4px;'
+                            return ''
+                        
+                        styled_timeline = styled_timeline.applymap(color_driver_cell, subset=['driver_name'])
+                        
+                        st.dataframe(styled_timeline, hide_index=True, use_container_width=True)
                         
                         # Display team-wise analysis
-                        st.write("#### Team Analysis")
+                        st.markdown('<p class="section-header">TEAM ANALYSIS</p>', unsafe_allow_html=True)
                         team_stats = df.groupby('team_name').agg({
                             'pit_duration': ['count', 'mean', 'min']
                         }).round(2)
                         team_stats.columns = ['Total Stops', 'Average Duration', 'Fastest Stop']
-                        st.dataframe(team_stats)
+                        
+                        # Style team analysis table
+                        styled_team = team_stats.style.set_table_attributes('class="f1-table"')
+                        
+                        # Apply background color based on fastest pit stop
+                        def highlight_fastest(s, prop='background-color', color='#FFFF00'):
+                            """Highlight the fastest pit stop"""
+                            is_min = s == s.min()
+                            return [f'{prop}: {color}; color: black; font-weight: bold;' if v else '' for v in is_min]
+                        
+                        styled_team = styled_team.apply(highlight_fastest, axis=0, subset=['Fastest Stop'])
+                        
+                        # Apply background color based on pit stop count
+                        def highlight_most_stops(s, prop='background-color', color='#AADDFF'):
+                            """Highlight team with most pit stops"""
+                            is_max = s == s.max()
+                            return [f'{prop}: {color}; color: black; font-weight: bold;' if v else '' for v in is_max]
+                        
+                        styled_team = styled_team.apply(highlight_most_stops, axis=0, subset=['Total Stops'])
+                        
+                        st.dataframe(styled_team, use_container_width=True)
                         
                         # Display driver-wise analysis
-                        st.write("#### Driver Analysis")
+                        st.markdown('<p class="section-header">DRIVER ANALYSIS</p>', unsafe_allow_html=True)
                         driver_stats = df.groupby('driver_name').agg({
                             'pit_duration': ['count', 'mean', 'min']
                         }).round(2)
                         driver_stats.columns = ['Total Stops', 'Average Duration', 'Fastest Stop']
-                        st.dataframe(driver_stats)
+                        
+                        # Style driver analysis table
+                        styled_driver = driver_stats.style.set_table_attributes('class="f1-table"')
+                        
+                        # Apply highlighting to driver table
+                        styled_driver = styled_driver.apply(highlight_fastest, axis=0, subset=['Fastest Stop'])
+                        styled_driver = styled_driver.apply(highlight_most_stops, axis=0, subset=['Total Stops'])
+                        
+                        st.dataframe(styled_driver, use_container_width=True)
                     else:
                         st.info("No pit stop data available for this session.")
                 else:
@@ -1245,7 +1711,7 @@ def main():
                 st.error("Failed to fetch session key. Please try again later.")
         
         elif st.session_state.current_subview == "stints":
-            st.write("### Tyre Stint Analysis")
+            st.markdown('<p class="section-header">TYRE STINT ANALYSIS</p>', unsafe_allow_html=True)
             if session_key:
                 drivers = fetch_drivers(session_key)
                 if drivers:
@@ -1254,7 +1720,7 @@ def main():
                         df = process_stints(stints, drivers)
                         
                         # Display overall statistics
-                        st.write("#### Overall Statistics")
+                        st.markdown('<p class="section-header">OVERALL STATISTICS</p>', unsafe_allow_html=True)
                         col1, col2, col3 = st.columns(3)
                         with col1:
                             st.metric("Total Stints", len(df))
@@ -1264,99 +1730,290 @@ def main():
                             st.metric("Longest Stint", f"{df['stint_length'].max()} laps")
                         
                         # Display stint timeline
-                        st.write("#### Stint Timeline")
+                        st.markdown('<p class="section-header">STINT TIMELINE</p>', unsafe_allow_html=True)
                         timeline_data = df[['driver_name', 'compound', 'lap_start', 'lap_end', 'stint_length']].copy()
                         timeline_data = timeline_data.sort_values('lap_start')
-                        st.dataframe(timeline_data, hide_index=True)
+                        
+                        # Style timeline table
+                        styled_timeline = timeline_data.style.set_table_attributes('class="timeline-table f1-table"')
+                        
+                        # Apply styling to compounds
+                        def color_compound(val):
+                            """Color code tyre compounds"""
+                            compounds = {
+                                'SOFT': '#FF3333',
+                                'MEDIUM': '#FFCC33',
+                                'HARD': '#FFFFFF',
+                                'INTERMEDIATE': '#33CC33',
+                                'WET': '#3333FF',
+                                'C1': '#FFFFFF',
+                                'C2': '#FFFFCC',
+                                'C3': '#FFCC33',
+                                'C4': '#FF9933',
+                                'C5': '#FF3333'
+                            }
+                            if val.upper() in compounds:
+                                bg_color = compounds[val.upper()]
+                                text_color = 'black' if val.upper() not in ['WET'] else 'white'
+                                return f'background-color: {bg_color}; color: {text_color}; font-weight: bold; border-radius: 4px; text-align: center;'
+                            return ''
+                        
+                        styled_timeline = styled_timeline.applymap(color_compound, subset=['compound'])
+                        
+                        # Apply styling to stint length
+                        def color_stint_length(val):
+                            """Color code stint length - longer stints are darker green"""
+                            if val > 30:  # Very long stint
+                                return 'background-color: #006600; color: white; font-weight: bold;'
+                            elif val > 20:  # Long stint
+                                return 'background-color: #009900; color: white; font-weight: bold;'
+                            elif val > 10:  # Medium stint
+                                return 'background-color: #33CC33; color: black;'
+                            elif val < 5:  # Very short stint
+                                return 'background-color: #FFCCCC; color: black;'
+                            return ''
+                        
+                        styled_timeline = styled_timeline.applymap(color_stint_length, subset=['stint_length'])
+                        
+                        # Add driver team colors
+                        driver_colors = {f"{d['name_acronym']} ({d['driver_number']})": f"#{d['team_colour']}" 
+                                       for d in drivers}
+                        
+                        def color_driver_cell(val):
+                            """Apply team color to driver name cell"""
+                            for driver_name, team_color in driver_colors.items():
+                                if val == driver_name:
+                                    # Convert hex to RGB to determine if background is light or dark
+                                    hex_color = team_color.lstrip('#')
+                                    rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                                    # Calculate relative luminance
+                                    luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
+                                    # Use white text for dark backgrounds, black for light backgrounds
+                                    text_color = 'white' if luminance < 0.5 else 'black'
+                                    return f'background-color: {team_color}; color: {text_color}; font-weight: bold; border-radius: 4px;'
+                            return ''
+                        
+                        styled_timeline = styled_timeline.applymap(color_driver_cell, subset=['driver_name'])
+                        
+                        st.dataframe(styled_timeline, hide_index=True, use_container_width=True)
                         
                         # Display compound analysis
-                        st.write("#### Compound Analysis")
+                        st.markdown('<p class="section-header">COMPOUND ANALYSIS</p>', unsafe_allow_html=True)
                         compound_stats = df.groupby('compound').agg({
                             'stint_length': ['count', 'mean', 'max']
                         }).round(2)
                         compound_stats.columns = ['Total Stints', 'Average Length', 'Longest Stint']
-                        st.dataframe(compound_stats)
+                        
+                        # Style compound analysis table
+                        styled_compound = compound_stats.style.set_table_attributes('class="f1-table"')
+                        
+                        # Apply background color based on stint counts and length
+                        def highlight_most_used(s, prop='background-color', color='#AADDFF'):
+                            """Highlight most used compound"""
+                            is_max = s == s.max()
+                            return [f'{prop}: {color}; color: black; font-weight: bold;' if v else '' for v in is_max]
+                        
+                        styled_compound = styled_compound.apply(highlight_most_used, axis=0, subset=['Total Stints'])
+                        styled_compound = styled_compound.apply(highlight_most_used, axis=0, subset=['Longest Stint'])
+                        
+                        st.dataframe(styled_compound, use_container_width=True)
                         
                         # Display team-wise analysis
-                        st.write("#### Team Analysis")
+                        st.markdown('<p class="section-header">TEAM ANALYSIS</p>', unsafe_allow_html=True)
                         team_stats = df.groupby('team_name').agg({
                             'stint_length': ['count', 'mean', 'max']
                         }).round(2)
                         team_stats.columns = ['Total Stints', 'Average Length', 'Longest Stint']
-                        st.dataframe(team_stats)
+                        
+                        # Style team analysis table
+                        styled_team = team_stats.style.set_table_attributes('class="f1-table"')
+                        styled_team = styled_team.apply(highlight_most_used, axis=0, subset=['Total Stints'])
+                        styled_team = styled_team.apply(highlight_most_used, axis=0, subset=['Longest Stint'])
+                        
+                        st.dataframe(styled_team, use_container_width=True)
                         
                         # Display driver-wise analysis
-                        st.write("#### Driver Analysis")
+                        st.markdown('<p class="section-header">DRIVER ANALYSIS</p>', unsafe_allow_html=True)
                         driver_stats = df.groupby('driver_name').agg({
                             'stint_length': ['count', 'mean', 'max']
                         }).round(2)
                         driver_stats.columns = ['Total Stints', 'Average Length', 'Longest Stint']
-                        st.dataframe(driver_stats)
+                        
+                        # Style driver analysis table
+                        styled_driver = driver_stats.style.set_table_attributes('class="f1-table"')
+                        styled_driver = styled_driver.apply(highlight_most_used, axis=0, subset=['Total Stints'])
+                        styled_driver = styled_driver.apply(highlight_most_used, axis=0, subset=['Longest Stint'])
+                        
+                        st.dataframe(styled_driver, use_container_width=True)
                     else:
                         st.info("No stint data available for this session.")
                 else:
                     st.error("Failed to load driver details. Please try again later.")
             else:
                 st.error("Failed to fetch session key. Please try again later.")
-        
-        elif st.session_state.current_subview == "track_map":
-            st.write("### Track Map - Fastest Laps")
-            if session_key:
-                drivers = fetch_drivers(session_key)
-                if drivers:
-                    # Get lap times
-                    lap_times = fetch_lap_times(session_key)
-                    if lap_times:
-                        # Get fastest lap data
-                        fastest_laps = get_fastest_lap_data(session_key, lap_times, drivers)
-                        
-                        # Display overall fastest lap
-                        st.write("#### Overall Fastest Lap")
-                        overall = fastest_laps['overall']
-                        st.write(f"**Driver:** {overall['driver_name']}")
-                        st.write(f"**Team:** {overall['team_name']}")
-                        st.write(f"**Lap:** {overall['lap_number']}")
-                        st.write(f"**Time:** {format_time(overall['lap_duration'])}")
-                        
-                        # Get location data for the fastest lap
-                        driver_number = next(d['driver_number'] for d in drivers 
-                                          if f"{d['name_acronym']} ({d['driver_number']})" == overall['driver_name'])
-                        location_data = fetch_location_data(session_key, driver_number)
-                        
-                        # Create and display track map
-                        if location_data:
-                            team_color = next(d['team_colour'] for d in drivers 
-                                            if d['driver_number'] == driver_number)
-                            track_map_html = create_track_map(location_data, overall['driver_name'], f"#{team_color}")
-                            st.components.v1.html(track_map_html, height=600)
-                        else:
-                            st.info("No location data available for this session.")
-                        
-                        # Display all drivers' fastest laps
-                        st.write("#### All Drivers' Fastest Laps")
-                        fastest_laps_df = pd.DataFrame([
-                            {k: v for k, v in data.items() if k != 'driver_name' and k != 'team_name'}
-                            for data in fastest_laps.values()
-                            if data['driver_name'] != overall['driver_name']
-                        ])
-                        fastest_laps_df = fastest_laps_df.sort_values('lap_duration')
-                        st.dataframe(fastest_laps_df, hide_index=True)
-                    else:
-                        st.info("No lap time data available for this session.")
-                else:
-                    st.error("Failed to load driver details. Please try again later.")
-            else:
-                st.error("Failed to fetch session key. Please try again later.")
     
     elif st.session_state.current_view == "drivers":
-        st.write("### Driver Standings")
-        # TODO: Implement driver standings view
-        st.info("Driver standings view coming soon!")
+        st.markdown('<p class="section-header">DRIVER CHAMPIONSHIP STANDINGS</p>', unsafe_allow_html=True)
+        
+        # Add season selector
+        seasons = fetch_seasons()
+        selected_season = st.selectbox("Select Season", seasons, index=0)
+        
+        # Fetch driver standings for the selected season
+        with st.spinner("Loading driver standings..."):
+            driver_standings = fetch_driver_standings(selected_season)
+        
+        if driver_standings:
+            # Display championship leader info
+            if len(driver_standings) > 0:
+                leader = driver_standings[0]
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown(
+                        f"""
+                        <div style="
+                            padding: 20px;
+                            border-radius: 10px;
+                            background-color: gold;
+                            color: black;
+                            text-align: center;
+                            margin-bottom: 20px;
+                            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+                        ">
+                            <h2 style="margin: 0;">Championship Leader</h2>
+                            <h1 style="margin: 10px 0;">{leader['name']}</h1>
+                            <p style="font-size: 1.2em; margin: 0;">{leader['points']} Points</p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                
+                with col2:
+                    team_color = leader['team_color']
+                    hex_color = team_color.lstrip('#')
+                    rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                    luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
+                    text_color = 'white' if luminance < 0.5 else 'black'
+                    
+                    st.markdown(
+                        f"""
+                        <div style="
+                            padding: 20px;
+                            border-radius: 10px;
+                            background-color: {team_color};
+                            color: {text_color};
+                            text-align: center;
+                            margin-bottom: 20px;
+                            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+                        ">
+                            <h2 style="margin: 0;">Team</h2>
+                            <h1 style="margin: 10px 0;">{leader['team']}</h1>
+                            <p style="font-size: 1.2em; margin: 0;">Driver #{leader['driver_number']}</p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+            
+            # Display points gap visualization for top 5
+            if len(driver_standings) >= 5:
+                st.markdown('<p class="section-header">CHAMPIONSHIP BATTLE - TOP 5</p>', unsafe_allow_html=True)
+                
+                top5 = driver_standings[:5]
+                gap_data = {
+                    'Driver': [f"{d['name_acronym']}" for d in top5],
+                    'Points': [d['points'] for d in top5],
+                    'Gap': [0] + [top5[0]['points'] - d['points'] for d in top5[1:]]
+                }
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Create points bar chart
+                    points_chart = pd.DataFrame(gap_data)
+                    st.bar_chart(data=points_chart.set_index('Driver')['Points'])
+                
+                with col2:
+                    # Create points gap table
+                    gap_df = pd.DataFrame({
+                        'Pos': [d['position'] for d in top5],
+                        'Driver': [f"{d['name_acronym']} ({d['driver_number']})" for d in top5],
+                        'Points': [d['points'] for d in top5],
+                        'Gap to Leader': ['-'] + [f"+{top5[0]['points'] - d['points']}" for d in top5[1:]]
+                    })
+                    
+                    styled_gap = gap_df.style.set_table_attributes('class="f1-table"')
+                    st.dataframe(styled_gap, hide_index=True, use_container_width=True)
+            
+            # Display full standings
+            st.markdown('<p class="section-header">FULL DRIVER STANDINGS</p>', unsafe_allow_html=True)
+            display_driver_standings(driver_standings)
+        else:
+            st.error("Failed to load driver standings data.")
     
-    else:  # Teams view
-        st.write("### Constructor Standings")
-        # TODO: Implement constructor standings view
-        st.info("Constructor standings view coming soon!")
-
+    elif st.session_state.current_view == "teams":
+        st.markdown('<p class="section-header">CONSTRUCTOR CHAMPIONSHIP STANDINGS</p>', unsafe_allow_html=True)
+        
+        # Add season selector
+        seasons = fetch_seasons()
+        selected_season = st.selectbox("Select Season", seasons, index=0)
+        
+        # Fetch constructor standings for the selected season
+        with st.spinner("Loading constructor standings..."):
+            constructor_standings = fetch_constructor_standings(selected_season)
+        
+        if constructor_standings:
+            # Display championship leader info
+            if len(constructor_standings) > 0:
+                leader = constructor_standings[0]
+                
+                team_color = leader['team_color']
+                hex_color = team_color.lstrip('#')
+                rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
+                text_color = 'white' if luminance < 0.5 else 'black'
+                
+                st.markdown(
+                    f"""
+                    <div style="
+                        padding: 20px;
+                        border-radius: 10px;
+                        background-color: {team_color};
+                        color: {text_color};
+                        text-align: center;
+                        margin-bottom: 20px;
+                        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+                    ">
+                        <h2 style="margin: 0;">Leading Constructor</h2>
+                        <h1 style="margin: 10px 0;">{leader['team']}</h1>
+                        <p style="font-size: 1.2em; margin: 5px 0;">{leader['points']} Points</p>
+                        <p style="font-size: 1.1em; margin: 5px 0;">Drivers: {', '.join([driver['name_acronym'] for driver in leader['drivers']])}</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+            
+            # Display points gap visualization for top teams
+            if len(constructor_standings) >= 3:
+                st.markdown('<p class="section-header">CONSTRUCTORS BATTLE</p>', unsafe_allow_html=True)
+                
+                # Create points bar chart
+                chart_data = pd.DataFrame({
+                    'Team': [team['team'] for team in constructor_standings],
+                    'Points': [team['points'] for team in constructor_standings]
+                })
+                
+                st.bar_chart(data=chart_data.set_index('Team')['Points'])
+            
+            # Display full standings
+            st.markdown('<p class="section-header">FULL CONSTRUCTOR STANDINGS</p>', unsafe_allow_html=True)
+            display_constructor_standings(constructor_standings)
+            
+            # Display team details
+            st.markdown('<p class="section-header">TEAM DETAILS</p>', unsafe_allow_html=True)
+            display_team_details(constructor_standings)
+        else:
+            st.error("Failed to load constructor standings data.")
+    
 if __name__ == "__main__":
     main()
