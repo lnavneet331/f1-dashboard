@@ -1,33 +1,32 @@
-# F1 Live Dashboard
+# Formula 1 Dashboard
 
-A real-time Formula 1 dashboard built with Streamlit that displays live race data using the OpenF1 API.
+An interactive dashboard for Formula 1 racing data using Streamlit and the OpenF1 API.
 
 ## Features
 
-- Real-time timing data
-- Live car telemetry
-- Weather conditions
-- Race control messages
-- Auto-refreshing dashboard
+- Select different F1 seasons
+- Choose specific race rounds
+- View different session types (Practice, Qualifying, Race, etc.)
+- Interactive data visualization (coming soon)
 
 ## Setup
 
-1. Clone this repository
-2. Install the required dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Run the Streamlit app:
-   ```bash
-   streamlit run app.py
-   ```
+1. Create a virtual environment (recommended):
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
 
-## Usage
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-The dashboard will automatically connect to the OpenF1 API and display real-time data during F1 sessions. The data refreshes every 5 seconds.
+## Running the Application
 
-Note: The dashboard will only show data during active F1 sessions (Practice, Qualifying, or Race sessions).
+To run the dashboard, execute:
+```bash
+streamlit run main.py
+```
 
-## Data Sources
-
-This dashboard uses the OpenF1 API (https://api.openf1.org) to fetch real-time Formula 1 data. The API is free to use and doesn't require authentication. 
+The application will open in your default web browser. 
