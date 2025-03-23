@@ -14,9 +14,27 @@ logger = logging.getLogger(__name__)
 
 # Constants
 BASE_URL = "https://api.openf1.org/v1"
-CURRENT_YEAR = 2000  # Focus on 2024 season
+CURRENT_YEAR = datetime.now().year  # Use current year instead of hardcoded value
 CACHE_DIR = "cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
+
+# DRS status mapping
+DRS_STATUS = {
+    0: "DRS off",
+    1: "DRS off",
+    8: "DRS eligible",
+    10: "DRS on",
+    12: "DRS on",
+    14: "DRS on"
+}
+
+# Session type priority for sorting
+SESSION_PRIORITY = {
+    'Race': 1,
+    'Sprint': 2,
+    'Qualifying': 3,
+    'Practice': 4
+}
 
 def get_cache_path(filename: str) -> str:
     """Get the full path for a cache file."""
@@ -258,6 +276,111 @@ def fetch_lap_times(session_key: int) -> List[Dict]:
         logger.error(f"Error fetching lap times: {str(e)}")
         return []
 
+@st.cache_resource
+def fetch_weather(session_key: int) -> Dict:
+    """Fetch weather data for a specific session."""
+    try:
+        cache_filename = f"weather_{session_key}.json"
+        cached_data = load_from_cache(cache_filename)
+        if cached_data:
+            logger.info(f"Loading weather data from cache for session {session_key}")
+            return cached_data
+
+        logger.info(f"Fetching weather data for session {session_key}")
+        response = requests.get(
+            f"{BASE_URL}/weather",
+            params={"session_key": session_key}
+        )
+        response.raise_for_status()
+        weather_data = response.json()
+        if weather_data:
+            # Get the latest weather data
+            latest_weather = weather_data[-1]
+            save_to_cache(latest_weather, cache_filename)
+            return latest_weather
+        return None
+    except Exception as e:
+        logger.error(f"Error fetching weather data: {str(e)}")
+        return None
+
+@st.cache_resource
+def fetch_car_data(session_key: int, driver_number: int) -> List[Dict]:
+    """Fetch car telemetry data for a specific driver and session."""
+    try:
+        cache_filename = f"car_data_{session_key}_{driver_number}.json"
+        cached_data = load_from_cache(cache_filename)
+        if cached_data:
+            logger.info(f"Loading car data from cache for session {session_key} and driver {driver_number}")
+            return cached_data
+
+        logger.info(f"Fetching car data for session {session_key} and driver {driver_number}")
+        response = requests.get(
+            f"{BASE_URL}/car_data",
+            params={
+                "session_key": session_key,
+                "driver_number": driver_number
+            }
+        )
+        response.raise_for_status()
+        car_data = response.json()
+        if car_data:
+            save_to_cache(car_data, cache_filename)
+        return car_data
+    except Exception as e:
+        logger.error(f"Error fetching car data: {str(e)}")
+        return []
+
+@st.cache_resource
+def fetch_race_control(session_key: int) -> List[Dict]:
+    """Fetch race control messages for a specific session."""
+    try:
+        cache_filename = f"race_control_{session_key}.json"
+        cached_data = load_from_cache(cache_filename)
+        if cached_data:
+            logger.info(f"Loading race control data from cache for session {session_key}")
+            return cached_data
+
+        logger.info(f"Fetching race control data for session {session_key}")
+        response = requests.get(
+            f"{BASE_URL}/race_control",
+            params={"session_key": session_key}
+        )
+        response.raise_for_status()
+        race_control_data = response.json()
+        if race_control_data:
+            save_to_cache(race_control_data, cache_filename)
+        return race_control_data
+    except Exception as e:
+        logger.error(f"Error fetching race control data: {str(e)}")
+        return []
+
+@st.cache_resource
+def fetch_team_radio(session_key: int, driver_number: int) -> List[Dict]:
+    """Fetch team radio messages for a specific driver and session."""
+    try:
+        cache_filename = f"team_radio_{session_key}_{driver_number}.json"
+        cached_data = load_from_cache(cache_filename)
+        if cached_data:
+            logger.info(f"Loading team radio data from cache for session {session_key} and driver {driver_number}")
+            return cached_data
+
+        logger.info(f"Fetching team radio data for session {session_key} and driver {driver_number}")
+        response = requests.get(
+            f"{BASE_URL}/team_radio",
+            params={
+                "session_key": session_key,
+                "driver_number": driver_number
+            }
+        )
+        response.raise_for_status()
+        radio_data = response.json()
+        if radio_data:
+            save_to_cache(radio_data, cache_filename)
+        return radio_data
+    except Exception as e:
+        logger.error(f"Error fetching team radio data: {str(e)}")
+        return []
+
 def get_latest_positions(positions: List[Dict]) -> Dict[int, int]:
     """Get the latest position for each driver."""
     latest_positions = {}
@@ -334,62 +457,129 @@ def format_time(seconds: float) -> str:
     except (TypeError, ValueError):
         return 'DNF'
 
+def get_latest_session_data() -> tuple:
+    """Get the latest available session data."""
+    try:
+        # Get the most recent season
+        seasons = fetch_seasons()
+        if not seasons:
+            return None, None, None
+        
+        latest_season = seasons[0]  # Seasons are already sorted in descending order
+        
+        # Get rounds for the latest season
+        rounds = fetch_rounds(latest_season)
+        if not rounds:
+            return None, None, None
+        
+        # Get the latest round
+        latest_round = rounds[-1]  # Rounds are sorted by date_start
+        meeting_key = latest_round.get('meeting_key')
+        
+        # Get session types for the latest round
+        session_types = fetch_session_types(meeting_key)
+        if not session_types:
+            return None, None, None
+        
+        # Prioritize session types (Race > Qualifying > Practice)
+        session_priority = {'Race': 1, 'Sprint': 2, 'Qualifying': 3, 'Practice': 4}
+        latest_session = min(session_types, key=lambda x: session_priority.get(x, 999))
+        
+        return latest_season, latest_round, latest_session
+    except Exception as e:
+        logger.error(f"Error getting latest session data: {str(e)}")
+        return None, None, None
+
 def main():
     st.title("Formula 1 Dashboard")
     
     # Create sidebar for controls
     with st.sidebar:
-        st.header("Controls")
+        st.header("Session Selection")
         
         # Add navigation buttons
         st.write("### Navigation")
         view = st.radio(
             "Select View",
-            ["🏁 Sessions", "👤 Driver Details"],
+            ["🏁 Sessions", "👤 Driver Details", "📊 Race Control"],
             index=0,
             horizontal=True
         )
 
-        # Fetch and display seasons dropdown
-        with st.spinner("Loading seasons..."):
-            seasons = fetch_seasons()
-        
-        if not seasons:
-            st.error("Failed to fetch seasons. Please try again later.")
-            return
+    # Fetch and display seasons dropdown
+    with st.spinner("Loading seasons..."):
+        seasons = fetch_seasons()
+    
+    if not seasons:
+        st.error("Failed to fetch seasons. Please try again later.")
+        return
 
-        selected_season = st.selectbox("Select Season", seasons)
+    # Get latest session data for default values
+    latest_season, latest_round, latest_session = get_latest_session_data()
+    
+    # Create default options
+    default_season = latest_season if latest_season else seasons[0]
+    default_round = f"Round {latest_round.get('round', 'N/A')} - {latest_round.get('meeting_name', 'Unknown')}" if latest_round else None
+    default_session = latest_session if latest_session else None
 
-        # Fetch and display rounds dropdown
-        with st.spinner("Loading rounds..."):
-            rounds = fetch_rounds(selected_season)
-        
-        if not rounds:
-            st.error("Failed to fetch rounds. Please try again later.")
-            return
+    # Select season with default value
+    selected_season = st.selectbox("Select Season", seasons, 
+                                 index=seasons.index(default_season) if default_season in seasons else 0)
 
-        round_options = {f"Round {r.get('round', 'N/A')} - {r.get('meeting_name', 'Unknown')}": r.get('meeting_key', 0) for r in rounds}
-        selected_round = st.selectbox("Select Round", list(round_options.keys()))
-        meeting_key = round_options[selected_round]
+    # Fetch rounds for the selected season
+    with st.spinner("Loading rounds..."):
+        rounds = fetch_rounds(selected_season)
+    
+    if not rounds:
+        st.error("Failed to fetch rounds. Please try again later.")
+        return
 
-        # Fetch and display session types dropdown
-        with st.spinner("Loading session types..."):
-            session_types = fetch_session_types(meeting_key)
-        
-        if not session_types:
-            st.error("Failed to fetch session types. Please try again later.")
-            return
+    # Create round options dictionary
+    round_options = {f"Round {r.get('round', 'N/A')} - {r.get('meeting_name', 'Unknown')}": r.get('meeting_key', 0) for r in rounds}
+    
+    # Select round with default value
+    selected_round = st.selectbox("Select Round", list(round_options.keys()), 
+                                index=list(round_options.keys()).index(default_round) if default_round in round_options else 0)
+    meeting_key = round_options[selected_round]
 
-        selected_session = st.selectbox("Select Session Type", session_types)
+    # Fetch session types for the selected round
+    with st.spinner("Loading session types..."):
+        session_types = fetch_session_types(meeting_key)
+    
+    if not session_types:
+        st.error("Failed to fetch session types. Please try again later.")
+        return
+
+    # Select session type with default value
+    selected_session = st.selectbox("Select Session Type", session_types,
+                                  index=session_types.index(default_session) if default_session in session_types else 0)
+
+    # Check if we have valid session data
+    session_key = fetch_session_key(meeting_key, selected_session)
+    if not session_key:
+        st.warning("No session data available for the selected options.")
+        return
 
     # Main content area
     if view == "🏁 Sessions":
         # Session View
         st.write(f"### {selected_season} {selected_round.split(' - ')[1]} · {selected_session}")
         
+        # Display weather information
+        weather_data = fetch_weather(session_key)
+        if weather_data:
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Air Temperature", f"{weather_data['air_temperature']}°C")
+            with col2:
+                st.metric("Track Temperature", f"{weather_data['track_temperature']}°C")
+            with col3:
+                st.metric("Humidity", f"{weather_data['humidity']}%")
+            with col4:
+                st.metric("Wind Speed", f"{weather_data['wind_speed']} m/s")
+        
         # Fetch and display leaderboard
         with st.spinner("Loading leaderboard..."):
-            session_key = fetch_session_key(meeting_key, selected_session)
             if session_key:
                 drivers = fetch_drivers(session_key)
                 positions = fetch_positions(session_key)
@@ -468,9 +658,8 @@ def main():
             else:
                 st.error("Failed to fetch session key. Please try again later.")
     
-    else:  # Driver Details View
+    elif view == "👤 Driver Details":
         st.write("### Driver Details")
-        session_key = fetch_session_key(meeting_key, selected_session)
         if session_key:
             drivers = fetch_drivers(session_key)
             if drivers:
@@ -508,8 +697,77 @@ def main():
                         # Add driver image if available
                         if 'headshot_url' in driver:
                             st.image(driver['headshot_url'], width=150)
+                        
+                        # Add car telemetry data
+                        car_data = fetch_car_data(session_key, driver['driver_number'])
+                        if car_data:
+                            latest_data = car_data[-1]
+                            st.write("Latest Telemetry:")
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.metric("Speed", f"{latest_data.get('speed', 'N/A')} km/h")
+                                st.metric("RPM", f"{latest_data.get('rpm', 'N/A')}")
+                            with col2:
+                                st.metric("DRS", DRS_STATUS.get(latest_data.get('drs', 0), "Unknown"))
+                                st.metric("Gear", f"{latest_data.get('n_gear', 'N/A')}")
+                        
+                        # Add team radio messages
+                        radio_messages = fetch_team_radio(session_key, driver['driver_number'])
+                        if radio_messages:
+                            st.write("Team Radio Messages:")
+                            for msg in radio_messages:
+                                st.audio(msg['recording_url'])
             else:
                 st.error("Failed to load driver details. Please try again later.")
+        else:
+            st.error("Failed to fetch session key. Please try again later.")
+    
+    else:  # Race Control View
+        st.write("### Race Control Messages")
+        if session_key:
+            race_control_data = fetch_race_control(session_key)
+            if race_control_data:
+                # Group messages by category
+                messages_by_category = {}
+                for msg in race_control_data:
+                    category = msg.get('category', 'Other')
+                    if category not in messages_by_category:
+                        messages_by_category[category] = []
+                    messages_by_category[category].append(msg)
+                
+                # Display messages by category
+                for category, messages in messages_by_category.items():
+                    st.write(f"#### {category}")
+                    for msg in messages:
+                        # Create a colored box based on flag type
+                        flag_color = {
+                            'RED': '#FF0000',
+                            'YELLOW': '#FFFF00',
+                            'GREEN': '#00FF00',
+                            'BLACK': '#000000',
+                            'BLUE': '#0000FF',
+                            'WHITE': '#FFFFFF',
+                            'CHEQUERED': '#000000'
+                        }.get(msg.get('flag', ''), '#808080')
+                        
+                        st.markdown(
+                            f"""
+                            <div style="
+                                background-color: {flag_color};
+                                color: {'white' if flag_color in ['#000000', '#0000FF'] else 'black'};
+                                padding: 10px;
+                                border-radius: 5px;
+                                margin: 5px 0;
+                            ">
+                                <strong>{msg.get('flag', 'Message')}</strong><br>
+                                {msg.get('message', 'No message')}<br>
+                                <small>Lap {msg.get('lap_number', 'N/A')}</small>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+            else:
+                st.info("No race control messages available for this session.")
         else:
             st.error("Failed to fetch session key. Please try again later.")
 
