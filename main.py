@@ -350,68 +350,37 @@ def main():
             horizontal=True
         )
 
-    # Add a test button to check API connectivity
-    if st.button("Test API Connection"):
-        try:
-            response = requests.get(
-                f"{BASE_URL}/meetings",
-                params={
-                    "year": CURRENT_YEAR,
-                }
-            )
-            if response.status_code == 200:
-                st.success("API connection successful!")
-                data = response.json()
-                st.write(f"Number of meetings found: {len(data)}")
-                if data:
-                    st.write("Sample meeting data:")
-                    st.json(data[0])  # Show first meeting data
-            else:
-                st.error(f"API connection failed with status code: {response.status_code}")
-        except requests.exceptions.RequestException as e:
-            st.error(f"API connection error: {str(e)}")
+        # Fetch and display seasons dropdown
+        with st.spinner("Loading seasons..."):
+            seasons = fetch_seasons()
+        
+        if not seasons:
+            st.error("Failed to fetch seasons. Please try again later.")
+            return
 
-    # Fetch and display seasons dropdown
-    with st.spinner("Loading seasons..."):
-        seasons = fetch_seasons()
-    
-    if not seasons:
-        st.error("Failed to fetch seasons. Please try again later.")
-        st.write("Debug information:")
-        try:
-            response = requests.get(
-                f"{BASE_URL}/meetings",
-                params={"year": CURRENT_YEAR}
-            )
-            st.write(f"Response status code: {response.status_code}")
-            st.write(f"Response content: {response.text[:200]}...")  # Show first 200 chars
-        except Exception as e:
-            st.write(f"Error details: {str(e)}")
-        return
+        selected_season = st.selectbox("Select Season", seasons)
 
-    selected_season = st.selectbox("Select Season", seasons)
+        # Fetch and display rounds dropdown
+        with st.spinner("Loading rounds..."):
+            rounds = fetch_rounds(selected_season)
+        
+        if not rounds:
+            st.error("Failed to fetch rounds. Please try again later.")
+            return
 
-    # Fetch and display rounds dropdown
-    with st.spinner("Loading rounds..."):
-        rounds = fetch_rounds(selected_season)
-    
-    if not rounds:
-        st.error("Failed to fetch rounds. Please try again later.")
-        return
+        round_options = {f"Round {r.get('round', 'N/A')} - {r.get('meeting_name', 'Unknown')}": r.get('meeting_key', 0) for r in rounds}
+        selected_round = st.selectbox("Select Round", list(round_options.keys()))
+        meeting_key = round_options[selected_round]
 
-    round_options = {f"Round {r.get('round', 'N/A')} - {r.get('meeting_name', 'Unknown')}": r.get('meeting_key', 0) for r in rounds}
-    selected_round = st.selectbox("Select Round", list(round_options.keys()))
-    meeting_key = round_options[selected_round]
+        # Fetch and display session types dropdown
+        with st.spinner("Loading session types..."):
+            session_types = fetch_session_types(meeting_key)
+        
+        if not session_types:
+            st.error("Failed to fetch session types. Please try again later.")
+            return
 
-    # Fetch and display session types dropdown
-    with st.spinner("Loading session types..."):
-        session_types = fetch_session_types(meeting_key)
-    
-    if not session_types:
-        st.error("Failed to fetch session types. Please try again later.")
-        return
-
-    selected_session = st.selectbox("Select Session Type", session_types)
+        selected_session = st.selectbox("Select Session Type", session_types)
 
     # Main content area
     if view == "🏁 Sessions":
