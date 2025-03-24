@@ -904,6 +904,19 @@ def process_stints(stints: List[Dict], drivers: List[Dict]) -> pd.DataFrame:
     
     return df
 
+def is_valid_hex_color(hex_color: str) -> bool:
+    """Check if a string is a valid hexadecimal color code."""
+    if hex_color.startswith('#'):
+        hex_color = hex_color[1:]
+    return len(hex_color) == 6 and all(c in '0123456789ABCDEFabcdef' for c in hex_color)
+
+def safe_hex_to_rgb(hex_color: str) -> tuple:
+    """Convert a hexadecimal color code to an RGB tuple, with validation."""
+    if not is_valid_hex_color(hex_color):
+        return (128, 128, 128)  # Default to grey if invalid
+    hex_color = hex_color.lstrip('#')
+    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+
 def display_driver_standings(driver_standings: List[Dict]):
     """Display driver standings in a styled table."""
     if not driver_standings:
@@ -947,9 +960,7 @@ def display_driver_standings(driver_standings: List[Dict]):
         for team_data in teams:
             if val == team_data['team']:
                 team_color = team_data['team_color']
-                # Convert hex to RGB to determine if background is light or dark
-                hex_color = team_color.lstrip('#')
-                rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                rgb = safe_hex_to_rgb(team_color)
                 luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
                 text_color = 'white' if luminance < 0.5 else 'black'
                 return f'background-color: {team_color}; color: {text_color}; font-weight: bold; border-radius: 4px; padding: 8px 12px;'
@@ -1014,9 +1025,7 @@ def display_constructor_standings(constructor_standings: List[Dict]):
         for team_data in teams:
             if val == team_data['team']:
                 team_color = team_data['team_color']
-                # Convert hex to RGB to determine if background is light or dark
-                hex_color = team_color.lstrip('#')
-                rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                rgb = safe_hex_to_rgb(team_color)
                 luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
                 text_color = 'white' if luminance < 0.5 else 'black'
                 return f'background-color: {team_color}; color: {text_color}; font-weight: bold; border-radius: 4px; padding: 8px 12px;'
@@ -1049,8 +1058,7 @@ def display_team_details(constructor_standings: List[Dict]):
     for team in constructor_standings:
         # Create a card with team color
         team_color = team['team_color']
-        hex_color = team_color.lstrip('#')
-        rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        rgb = safe_hex_to_rgb(team_color)
         luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
         text_color = 'white' if luminance < 0.5 else 'black'
         
@@ -1547,10 +1555,10 @@ def main():
                     with col1:
                         resampling_interval = st.slider(
                             "Adjust data resolution",
-                            min_value=0.1,
-                            max_value=120.0,  # Increased to 2 minutes
-                            value=1.0,
-                            step=0.1,
+                            min_value=1,
+                            max_value=120,  # Increased to 2 minutes
+                            value=5,
+                            step=1,
                             help="Lower values show more detail but may be slower to render. Higher values show smoother trends. Maximum is 2 minutes."
                         )
                     with col2:
@@ -1891,8 +1899,7 @@ def main():
                 
                 with col2:
                     team_color = leader['team_color']
-                    hex_color = team_color.lstrip('#')
-                    rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                    rgb = safe_hex_to_rgb(team_color)
                     luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
                     text_color = 'white' if luminance < 0.5 else 'black'
                     
@@ -1968,8 +1975,7 @@ def main():
                 leader = constructor_standings[0]
                 
                 team_color = leader['team_color']
-                hex_color = team_color.lstrip('#')
-                rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+                rgb = safe_hex_to_rgb(team_color)
                 luminance = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255
                 text_color = 'white' if luminance < 0.5 else 'black'
                 
